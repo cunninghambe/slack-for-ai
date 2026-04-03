@@ -1,0 +1,484 @@
+/**
+ * Channel Membership Management Routes
+ *
+ * Endpoints:
+ *   GET    /api/channels/:channelId/members       - List channel members
+ *   POST   /api/channels/:channelId/members       - Add member(s) to channel
+ *   PATCH  /api/channels/:channelId/members/:memberId - Update member role
+ *   DELETE /api/channels/:channelId/members/:memberId - Remove member from channel
+ *   DELETE /api/channels/:channelId/members/me    - Leave channel (self-removal)
+ *   GET    /api/channels/:channelId/members/me     - Check own membership
+ */
+import { Router, Request, Response } from "express";
+import { z } from "zod";
+import {
+  db,
+  channels,
+  channelMemberships,
+  agents as agentsTable,
+  authUsers,
+} from "../db.js";
+import { eq, and, isNull, or, inArray } from "drizzle-orm";
+import { authenticate, requireCompany } from "../middleware/auth.js";
+import { logActivity } from "../utils/helpers.js";
+
+const router = Router();
+const COMPANY_ID = "91d80478-1fd3-4025-8ec1-5bf3aed65665";
+
+router.use(authenticate);
+router.use(requireCompany(COMPANY_ID));
+
+// --- Validation schemas ---
+
+const addMembersSchema = z.object({
+  agentIds: z.array(z.string().uuid()).optional(),
+  userIds: z.array(z.string()).optional(),
+  role: z.enum(["admin", "member"]).default("member"),
+});
+
+const updateMemberSchema = z.object({
+  role: z.enum(["admin", "member"]),
+});
+
+// --- Helper: verify actor is a channel admin ---
+async function requireAdmin(channelId: string, actor: { kind: string; id: string }) {
+  const membership = await db.query.channelMemberships.findFirst({
+    where: and(
+      eq(channelMemberships.channelId, channelId),
+      actor.kind === "agent"
+        ? eq(channelMemberships.agentId, actor.id)
+        : eq(channelMemberships.userId, actor.id),
+      isNull(channelMemberships.leftAt)
+    ),
+  });
+
+  if (!membership) {
+    return false;
+  }
+  if (membership.role !== "admin") {
+    return false;
+  }
+  return true;
+}
+
+// --- Helper: check actor is a channel member ---
+async function requireMember(channelId: string, actor: { kind: string; id: string }) {
+  const membership = await db.query.channelMemberships.findFirst({
+    where: and(
+      eq(channelMemberships.channelId, channelId),
+      actor.kind === "agent"
+        ? eq(channelMemberships.agentId, actor.id)
+        : eq(channelMemberships.userId, actor.id),
+      isNull(channelMemberships.leftAt)
+    ),
+  });
+  return membership;
+}
+
+// --- Helper: verify channel exists ---
+async function findChannel(channelId: string) {
+  const rows = await db
+    .select()
+    .from(channels)
+    .where(
+      and(
+        eq(channels.id, channelId),
+        eq(channels.companyId, COMPANY_ID),
+        isNull(channels.deletedAt)
+      )
+    )
+    .limit(1);
+  return rows.length > 0 ? rows[0] : null;
+}
+
+// ============================================================
+// GET /api/channels/:channelId/members
+// List all current members of a channel (with agent/user names)
+// ============================================================
+router.get("/:channelId/members", async (req: Request, res: Response) => {
+  try {
+    const actor = req.actor!;
+    const channelId = req.params.channelId as string;
+
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+
+    // For private/group_dm channels, require membership
+    if (channel.channelType === "private" || channel.channelType === "group_dm" || channel.channelType === "dm") {
+      const membership = await requireMember(channelId, actor);
+      if (!membership) {
+        res.status(403).json({ error: "Not a member of this channel" });
+        return;
+      }
+    }
+
+    // Get all active memberships with agent/user info
+    const memberships = await db
+      .select({
+        id: channelMemberships.id,
+        channelId: channelMemberships.channelId,
+        role: channelMemberships.role,
+        joinedAt: channelMemberships.joinedAt,
+        leftAt: channelMemberships.leftAt,
+        agentId: channelMemberships.agentId,
+        userId: channelMemberships.userId,
+        agentName: agentsTable.name,
+        userName: authUsers.name,
+        agentKeyName: agentsTable.keyName,
+      })
+      .from(channelMemberships)
+      .where(
+        and(
+          eq(channelMemberships.channelId, channelId),
+          isNull(channelMemberships.leftAt)
+        )
+      )
+      .leftJoin(
+        agentsTable,
+        eq(channelMemberships.agentId, agentsTable.id)
+      )
+      .leftJoin(
+        authUsers,
+        eq(channelMemberships.userId, authUsers.id)
+      );
+
+    const members = memberships.map((m) => ({
+      id: m.id,
+      channelId: m.channelId,
+      role: m.role,
+      joinedAt: m.joinedAt,
+      kind: m.agentId ? "agent" : "user",
+      agentId: m.agentId,
+      userId: m.userId,
+      name: m.agentName ?? m.userName ?? "Unknown",
+      keyName: m.agentKeyName ?? null,
+    }));
+
+    res.json({ members, count: members.length });
+  } catch (err) {
+    console.error("Error listing channel members:", err);
+    res.status(500).json({ error: "Failed to list channel members" });
+  }
+});
+
+// ============================================================
+// GET /api/channels/:channelId/members/me
+// Check own membership status in a channel
+// ============================================================
+router.get("/:channelId/members/me", async (req: Request, res: Response) => {
+  try {
+    const actor = req.actor!;
+    const channelId = req.params.channelId as string;
+
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+
+    const membership = await requireMember(channelId, actor);
+    if (!membership) {
+      res.status(404).json({ error: "Not a member of this channel" });
+      return;
+    }
+
+    res.json({
+      id: membership.id,
+      channelId: membership.channelId,
+      role: membership.role,
+      joinedAt: membership.joinedAt,
+    });
+  } catch (err) {
+    console.error("Error checking membership:", err);
+    res.status(500).json({ error: "Failed to check membership" });
+  }
+});
+
+// ============================================================
+// POST /api/channels/:channelId/members
+// Add one or more agents/users to a channel
+// ============================================================
+router.post("/:channelId/members", async (req: Request, res: Response) => {
+  try {
+    const actor = req.actor!;
+    const channelId = req.params.channelId as string;
+
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+
+    // Require admin to add members
+    const isAdmin = await requireAdmin(channelId, actor);
+    if (!isAdmin) {
+      res.status(403).json({ error: "Only channel admins can add members" });
+      return;
+    }
+
+    const validation = addMembersSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(422).json({
+        error: "Validation failed",
+        details: validation.error.flatten(),
+      });
+      return;
+    }
+
+    const { agentIds, userIds, role } = validation.data;
+    const added: Array<{ kind: string; id: string }> = [];
+
+    // Add agents
+    if (agentIds && agentIds.length > 0) {
+      for (const agentId of agentIds) {
+        // Check if already a member
+        const existing = await db.query.channelMemberships.findFirst({
+          where: and(
+            eq(channelMemberships.channelId, channelId),
+            eq(channelMemberships.agentId, agentId),
+            isNull(channelMemberships.leftAt)
+          ),
+        });
+
+        if (existing) {
+          continue; // skip already a member
+        }
+
+        const [inserted] = await db
+          .insert(channelMemberships)
+          .values({
+            channelId,
+            agentId,
+            role,
+          } as any)
+          .returning();
+
+        added.push({ kind: "agent", id: agentId });
+      }
+    }
+
+    // Add users
+    if (userIds && userIds.length > 0) {
+      for (const userId of userIds) {
+        const existing = await db.query.channelMemberships.findFirst({
+          where: and(
+            eq(channelMemberships.channelId, channelId),
+            eq(channelMemberships.userId, userId),
+            isNull(channelMemberships.leftAt)
+          ),
+        });
+
+        if (existing) {
+          continue;
+        }
+
+        const [inserted] = await db
+          .insert(channelMemberships)
+          .values({
+            channelId,
+            userId,
+            role,
+          } as any)
+          .returning();
+
+        added.push({ kind: "user", id: userId });
+      }
+    }
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "channel.members.added",
+      entityType: "channel",
+      entityId: channelId,
+      details: { added },
+    });
+
+    res.status(201).json({ added, total: added.length });
+  } catch (err) {
+    console.error("Error adding members:", err);
+    res.status(500).json({ error: "Failed to add members" });
+  }
+});
+
+// ============================================================
+// PATCH /api/channels/:channelId/members/:memberId
+// Update a member's role (admin -> member or vice versa)
+// ============================================================
+router.patch(
+  "/:channelId/members/:memberId",
+  async (req: Request, res: Response) => {
+    try {
+      const actor = req.actor!;
+      const channelId = req.params.channelId as string;
+    const memberId = req.params.memberId as string;
+
+      const channel = await findChannel(channelId);
+      if (!channel) {
+        res.status(404).json({ error: "Channel not found" });
+        return;
+      }
+
+      // Require admin to update roles
+      const isAdmin = await requireAdmin(channelId, actor);
+      if (!isAdmin) {
+        res.status(403).json({ error: "Only channel admins can update roles" });
+        return;
+      }
+
+      const validation = updateMemberSchema.safeParse(req.body);
+      if (!validation.success) {
+        res.status(422).json({
+          error: "Validation failed",
+          details: validation.error.flatten(),
+        });
+        return;
+      }
+
+      const membership = await db.query.channelMemberships.findFirst({
+        where: and(
+          eq(channelMemberships.id, memberId),
+          eq(channelMemberships.channelId, channelId),
+          isNull(channelMemberships.leftAt)
+        ),
+      });
+
+      if (!membership) {
+        res.status(404).json({ error: "Membership not found" });
+        return;
+      }
+
+      const [updated] = await db
+        .update(channelMemberships)
+        .set({ role: validation.data.role } as any)
+        .where(eq(channelMemberships.id, memberId))
+        .returning();
+
+      await logActivity({
+        actor,
+        companyId: COMPANY_ID,
+        action: "channel.member.role_updated",
+        entityType: "channel",
+        entityId: channelId,
+        details: { memberId, fromRole: membership.role, toRole: validation.data.role },
+      });
+
+      res.json(updated);
+    } catch (err) {
+      console.error("Error updating member role:", err);
+      res.status(500).json({ error: "Failed to update member role" });
+    }
+  }
+);
+
+// ============================================================
+// DELETE /api/channels/:channelId/members/:memberId
+// Remove a specific member from a channel (admin action)
+// ============================================================
+router.delete(
+  "/:channelId/members/:memberId",
+  async (req: Request, res: Response) => {
+    try {
+      const actor = req.actor!;
+      const channelId = req.params.channelId as string;
+    const memberId = req.params.memberId as string;
+
+      const channel = await findChannel(channelId);
+      if (!channel) {
+        res.status(404).json({ error: "Channel not found" });
+        return;
+      }
+
+      // Require admin to remove others
+      const isAdmin = await requireAdmin(channelId, actor);
+      if (!isAdmin) {
+        res.status(403).json({ error: "Only channel admins can remove members" });
+        return;
+      }
+
+      const membership = await db.query.channelMemberships.findFirst({
+        where: and(
+          eq(channelMemberships.id, memberId),
+          eq(channelMemberships.channelId, channelId),
+          isNull(channelMemberships.leftAt)
+        ),
+      });
+
+      if (!membership) {
+        res.status(404).json({ error: "Membership not found or already removed" });
+        return;
+      }
+
+      // Soft-delete by setting leftAt
+      const [updated] = await db
+        .update(channelMemberships)
+        .set({ leftAt: new Date() } as any)
+        .where(eq(channelMemberships.id, memberId))
+        .returning();
+
+      await logActivity({
+        actor,
+        companyId: COMPANY_ID,
+        action: "channel.member.removed",
+        entityType: "channel",
+        entityId: channelId,
+        details: { memberId, removedBy: actor.id },
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error removing member:", err);
+      res.status(500).json({ error: "Failed to remove member" });
+    }
+  }
+);
+
+// ============================================================
+// DELETE /api/channels/:channelId/members/me
+// Leave channel (self-removal)
+// ============================================================
+router.delete("/:channelId/members/me", async (req: Request, res: Response) => {
+  try {
+    const actor = req.actor!;
+    const channelId = req.params.channelId as string;
+
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
+    }
+
+    const membership = await requireMember(channelId, actor);
+    if (!membership) {
+      res.status(404).json({ error: "Not a member of this channel" });
+      return;
+    }
+
+    // Only admins can leave channels they created (prevent lone channel orphaning)
+    // For simplicity, allow anyone to leave
+
+    await db
+      .update(channelMemberships)
+      .set({ leftAt: new Date() } as any)
+      .where(eq(channelMemberships.id, membership.id));
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "channel.member.left",
+      entityType: "channel",
+      entityId: channelId,
+      details: { leftBy: actor.id },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error leaving channel:", err);
+    res.status(500).json({ error: "Failed to leave channel" });
+  }
+});
+
+export default router;
