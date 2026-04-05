@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef, useLayoutEffect } from 'react'
 import { Channel, Message } from '../types'
 import SearchModal from './SearchModal'
 import ChannelSidebar from './ChannelSidebar'
@@ -59,6 +59,56 @@ export default function SlackApp({
   const [sendingMessage, setSendingMessage] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { openThread, loading: threadLoading, open: openThreadFn, close: closeThreadFn, setOpenThread } = useThread()
+
+  // ── Auto-scroll logic ──────────────────────────────────────────
+  const messageListRef = useRef<HTMLDivElement>(null)
+  const isNearBottomRef = useRef(true)
+  const [hasNewMessages, setHasNewMessages] = useState(false)
+  const prevMessageCountRef = useRef(0)
+
+  // Track whether user is near the bottom of the scroll container
+  const handleScroll = useCallback(() => {
+    const el = messageListRef.current
+    if (!el) return
+    const threshold = 150
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    isNearBottomRef.current = nearBottom
+    if (nearBottom) setHasNewMessages(false)
+  }, [])
+
+  // Auto-scroll to bottom when messages change, if user was near bottom
+  useLayoutEffect(() => {
+    const el = messageListRef.current
+    if (!el) return
+    const newCount = messages.length
+    const hadMessages = prevMessageCountRef.current > 0
+
+    if (isNearBottomRef.current || !hadMessages) {
+      el.scrollTop = el.scrollHeight
+      setHasNewMessages(false)
+    } else if (newCount > prevMessageCountRef.current) {
+      setHasNewMessages(true)
+    }
+    prevMessageCountRef.current = newCount
+  }, [messages])
+
+  // Scroll to bottom when switching channels
+  useEffect(() => {
+    isNearBottomRef.current = true
+    setHasNewMessages(false)
+    prevMessageCountRef.current = 0
+    const el = messageListRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [activeChannelId])
+
+  const scrollToBottom = useCallback(() => {
+    const el = messageListRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
+      isNearBottomRef.current = true
+      setHasNewMessages(false)
+    }
+  }, [])
 
   // Keyboard shortcut: Ctrl+K / Cmd+K opens search modal
   useEffect(() => {
@@ -217,7 +267,7 @@ export default function SlackApp({
       />
 
       {/* Main content */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
         {activeChannel ? (
           <>
             <ChannelHeader
@@ -230,10 +280,13 @@ export default function SlackApp({
 
             {/* Message list */}
             <div
+              ref={messageListRef}
+              onScroll={handleScroll}
               style={{
                 flex: 1,
                 overflowY: 'auto',
                 padding: 'var(--space-4) 0',
+                position: 'relative',
               }}
             >
               {loadingMessages ? (
@@ -278,6 +331,31 @@ export default function SlackApp({
                 </>
               )}
             </div>
+
+            {/* New messages indicator */}
+            {hasNewMessages && (
+              <button
+                onClick={scrollToBottom}
+                style={{
+                  position: 'absolute',
+                  bottom: 120,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 20,
+                  padding: '6px 16px',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  zIndex: 10,
+                  boxShadow: 'var(--shadow-md)',
+                }}
+              >
+                {'\u2193'} New messages
+              </button>
+            )}
 
             {/* Typing indicator */}
             <TypingIndicator users={typingUsers} visible={typingUsers.length > 0} />
