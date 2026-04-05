@@ -45,6 +45,24 @@ export function broadcastToChannel(
 }
 
 /**
+ * Get the total number of active WebSocket connections across all channels.
+ */
+export function getTotalConnectionCount(): number {
+  let total = 0;
+  for (const clients of channelConnections.values()) {
+    total += clients.size;
+  }
+  return total;
+}
+
+/**
+ * Get the number of active WebSocket channels.
+ */
+export function getActiveChannelCount(): number {
+  return channelConnections.size;
+}
+
+/**
  * Get the number of active subscribers for a channel.
  */
 export function getChannelConnectionCount(channelId: string): number {

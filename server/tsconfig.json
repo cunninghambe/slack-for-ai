@@ -14,5 +14,6 @@
     "noEmitOnError": false,
     "allowJs": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "dist"]
 }

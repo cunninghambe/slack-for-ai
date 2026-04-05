@@ -63,6 +63,32 @@ export const authUsers=pgTable("auth_users", {
     .defaultNow(),
 });
 
+// File attachments table
+export const fileAttachments = pgTable(
+  "platform_file_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelId: uuid("channel_id").notNull(),
+    messageId: uuid("message_id"),
+    filename: text("filename").notNull(),
+    storedName: text("stored_name").notNull(),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes").notNull(),
+    extension: text("extension"),
+    uploadedByAgentId: uuid("uploaded_by_agent_id"),
+    uploadedByUserId: text("uploaded_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("file_attachments_channel_idx").on(table.channelId),
+    index("file_attachments_message_idx").on(table.messageId),
+    index("file_attachments_created_idx").on(table.createdAt),
+  ]
+);
+
 export const activityLog = pgTable("activity_log", {
   id: uuid("id").primaryKey().defaultRandom(),
   companyId: uuid("company_id").notNull(),
@@ -135,13 +161,9 @@ export const channelMemberships = pgTable(
     channelIdx: index("platform_memberships_channel_idx").on(table.channelId),
     agentIdx: index("platform_memberships_agent_idx").on(table.agentId),
     userIdx: index("platform_memberships_user_idx").on(table.userId),
-    channelAgentUnique: unique(
-      "platform_memberships_channel_agent_unique"
-    ).on(table.channelId, table.agentId),
-    channelUserUnique: unique("platform_memberships_channel_user_unique").on(
-      table.channelId,
-      table.userId
-    ),
+    // Unique constraints removed — overly strict (prevented rejoin after leave).
+    // Application layer enforces one active membership per user/agent per channel
+    // by checking `WHERE leftAt IS NULL` before inserting.
   })
 );
 
@@ -222,8 +244,58 @@ export const messageReactions = pgTable(
 );
 
 // ============================================================
-// Slow query detection
+// Read receipts
 // ============================================================
+
+export const readReceipts = pgTable(
+  "platform_read_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => authUsers.id, { onDelete: "cascade" }),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    messageAgentUnique: unique("platform_read_receipts_message_agent_unique").on(
+      table.messageId,
+      table.agentId,
+    ),
+    messageUserUnique: unique("platform_read_receipts_message_user_unique").on(
+      table.messageId,
+      table.userId,
+    ),
+    messageIdx: index("platform_read_receipts_message_idx").on(table.messageId),
+    agentIdx: index("platform_read_receipts_agent_idx").on(table.agentId),
+  }),
+);
+
+// ============================================================
+// Presence and audit log
+// ============================================================
+
+export const presenceAuditLog = pgTable(
+  "platform_presence_audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    userId: text("user_id").references(() => authUsers.id, { onDelete: "set null" }),
+    eventKind: text("event_kind").notNull(),
+    action: text("action").notNull(),
+    metadata: text("metadata"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    agentIdx: index("platform_presence_audit_agent_idx").on(table.agentId),
+    userIdx: index("platform_presence_audit_user_idx").on(table.userId),
+    kindOccurrenceIdx: index("platform_presence_audit_kind_occurrence_idx").on(
+      table.eventKind,
+      table.occurredAt,
+    ),
+  }),
+);
 
 // ============================================================
 // Slow query detection
@@ -307,6 +379,18 @@ function wrapPoolForSlowQueries(targetPool: Pool): Pool {
 // Full schema object for typed db
 // ============================================================
 
+// ============================================================
+// Insert model types (avoids `as any` on .values() / .set())
+// ============================================================
+
+export type NewChannel = typeof channels.$inferInsert;
+export type NewChannelMembership = typeof channelMemberships.$inferInsert;
+export type NewMessage = typeof messages.$inferInsert;
+export type NewReaction = typeof messageReactions.$inferInsert;
+export type NewActivityLog = typeof activityLog.$inferInsert;
+export type NewFileAttachment = typeof fileAttachments.$inferInsert;
+export type NewReadReceipt = typeof readReceipts.$inferInsert;
+
 export const schema = {
   companies,
   agents,
@@ -317,6 +401,9 @@ export const schema = {
   channelMemberships,
   messages,
   messageReactions,
+  fileAttachments,
+  readReceipts,
+  presenceAuditLog,
 };
 
 export type Database = NodePgDatabase<typeof schema>;

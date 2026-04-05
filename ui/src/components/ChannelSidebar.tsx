@@ -18,7 +18,7 @@ export default function ChannelSidebar({
 }: SidebarProps) {
   const publicChannels = channels.filter((c) => c.type === 'public')
   const privateChannels = channels.filter((c) => c.type === 'private')
-  const dmChannels = channels.filter((c) => c.type === 'dm' || c.type === 'group-dm')
+  const dmChannels = channels.filter((c) => c.type === 'dm' || c.type === 'group_dm')
 
   // Build user lookup for DMs
   const userMap = new Map<string, User>()
@@ -39,7 +39,7 @@ export default function ChannelSidebar({
 
   const renderChannelItem = (channel: Channel) => {
     const isActive = channel.id === activeChannelId
-    const isDM = channel.type === 'dm' || channel.type === 'group-dm'
+    const isDM = channel.type === 'dm' || channel.type === 'group_dm'
     const dmUser = isDM ? getDMUser(channel) : undefined
 
     const baseStyle: React.CSSProperties = {

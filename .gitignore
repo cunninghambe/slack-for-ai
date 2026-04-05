@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.local
+
+# Duplicate nested dirs (agent build artifacts)
+server/server/
+ui/ui/
+
+# Test artifacts
+server/test-db.mjs

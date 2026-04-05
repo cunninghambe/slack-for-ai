@@ -10,13 +10,17 @@ import { createServer } from "http";
 import { parse } from "url";
 import { v4 as uuidv4 } from "uuid";
 import { pool } from "./db.js";
-import { channelConnections, wsMeta } from "./ws.js";
+import { attachWebSocket, broadcastToChannel } from "./websocket.js";
 import channelsRouter from "./routes/channels.js";
 import messagesRouter from "./routes/messages.js";
 import reactionsRouter from "./routes/reactions.js";
 import membershipsRouter from "./routes/memberships.js";
+import companyMembershipsRouter from "./routes/company-memberships.js";
 import healthRouter from "./routes/health.js";
 import metricsRouter from "./routes/metrics.js";
+import mcpRouter from "./routes/mcp.js";
+import uploadsRouter from "./routes/uploads.js";
+import channelMembershipRouter from "./routes/channel-membership.js";
 import { requestMetrics, errorTracker, rateLimiter } from "./middleware/monitoring.js";
 import { correlationId } from "./middleware/correlation.js";
 import { logger } from "./utils/logger.js";
@@ -65,209 +69,23 @@ app.use("/api/messages", reactionsRouter);
 // DELETE /api/channels/:channelId/members/me    - Leave channel
 app.use("/api/channels", membershipsRouter);
 
+// ─── Company-Scoped Membership Routes ────────────────
+// GET    /api/companies/:companyId/channels/:channelId/members        - List members
+// POST   /api/companies/:companyId/channels/:channelId/members        - Add agent to channel
+// DELETE /api/companies/:companyId/channels/:channelId/members/:agentId - Remove agent from channel
+app.use("/api/companies/:companyId/channels", companyMembershipsRouter);
+
+// ─── Channel Membership Routes (direct /api/memberships/... paths) ──
+// GET    /api/memberships/channels/:channelId          - List members
+// GET    /api/memberships/channels/:channelId/agents/:agentId - Check membership
+// POST   /api/memberships/channels/:channelId          - Add agent to channel
+// DELETE /api/memberships/channels/:channelId/agents/:agentId - Remove agent
+app.use("/api/memberships", channelMembershipRouter);
+
+app.use("/api", uploadsRouter);
+
 // ─── WebSocket Server (Real-Time Messaging) ──────────────
-const wss = new WebSocketServer({ noServer: true });
-
-// channelConnections and wsMeta are imported from ./ws.ts
-
-interface WSClientMessage {
-  type: "join" | "message" | "typing" | "ping";
-  channelId?: string;
-  payload?: Record<string, unknown>;
-}
-
-/**
- * Upgrade HTTP requests to WebSocket.
- * Routes /ws upgrade requests to the WSS.
- */
-httpServer.on("upgrade", (request, socket, head) => {
-  const pathname = parse(request.url ?? "").pathname;
-  if (pathname === "/ws") {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
-  } else {
-    socket.destroy();
-  }
-});
-
-wss.on("connection", (ws, req) => {
-  const meta = { connectedAt: new Date() };
-  wsMeta.set(ws, meta);
-
-  // Send connection acknowledgment
-  ws.send(
-    JSON.stringify({
-      type: "connected",
-      serverTime: new Date().toISOString(),
-      socketId: uuidv4(),
-    })
-  );
-
-  ws.on("message", (raw: Buffer) => {
-    let msg: WSClientMessage;
-    try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      ws.send(
-        JSON.stringify({ type: "error", message: "Invalid JSON payload" })
-      );
-      return;
-    }
-
-    const currentMeta = wsMeta.get(ws) ?? { connectedAt: new Date() };
-
-    switch (msg.type) {
-      case "join": {
-        const channelId = msg.channelId;
-        if (!channelId) {
-          ws.send(
-            JSON.stringify({ type: "error", message: "channelId required for join" })
-          );
-          return;
-        }
-
-        // Leave previous channel if any
-        if (currentMeta.channelId) {
-          const prev = channelConnections.get(currentMeta.channelId);
-          if (prev) {
-            prev.delete(ws);
-          }
-        }
-
-        // Join new channel
-        if (!channelConnections.has(channelId)) {
-          channelConnections.set(channelId, new Set());
-        }
-        channelConnections.get(channelId)!.add(ws);
-        wsMeta.set(ws, { ...currentMeta, channelId });
-
-        ws.send(
-          JSON.stringify({
-            type: "joined",
-            channelId,
-            memberCount: channelConnections.get(channelId)!.size,
-          })
-        );
-        break;
-      }
-
-      case "message": {
-        // The client sends a message payload; the server broadcasts it
-        // to all other subscribers of the same channel.
-        // Note: actual persistence happens via REST POST /api/channels/:id/messages
-        // This WS path is for real-time delivery of already-persisted messages
-        // or for optimistic client updates.
-        if (!currentMeta.channelId) {
-          ws.send(
-            JSON.stringify({
-              type: "error",
-              message: "Not joined to any channel",
-            })
-          );
-          return;
-        }
-
-        const broadcastMsg = JSON.stringify({
-          type: "message",
-          channelId: currentMeta.channelId,
-          payload: msg.payload ?? {},
-          timestamp: new Date().toISOString(),
-        });
-
-        const subscribers = channelConnections.get(currentMeta.channelId);
-        if (subscribers) {
-          for (const client of subscribers) {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(broadcastMsg);
-            }
-          }
-        }
-        break;
-      }
-
-      case "typing": {
-        if (!currentMeta.channelId) return;
-
-        const typingMsg = JSON.stringify({
-          type: "typing",
-          channelId: currentMeta.channelId,
-          payload: msg.payload ?? {},
-        });
-
-        const subscribers = channelConnections.get(currentMeta.channelId);
-        if (subscribers) {
-          for (const client of subscribers) {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(typingMsg);
-            }
-          }
-        }
-        break;
-      }
-
-      case "ping": {
-        ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
-        break;
-      }
-
-      default:
-        ws.send(
-          JSON.stringify({ type: "error", message: `Unknown message type: ${msg.type}` })
-        );
-    }
-  });
-
-  ws.on("close", () => {
-    const currentMeta = wsMeta.get(ws);
-    if (currentMeta?.channelId) {
-      const subscribers = channelConnections.get(currentMeta.channelId);
-      if (subscribers) {
-        subscribers.delete(ws);
-        if (subscribers.size === 0) {
-          channelConnections.delete(currentMeta.channelId);
-        }
-      }
-    }
-  });
-
-  ws.on("error", (err) => {
-    console.error("WebSocket error:", err.message);
-  });
-});
-
-// ─── Public API: broadcast helper ────────────────────────────
-/**
- * Broadcast a message to all WebSocket clients subscribed to a channel.
- * Called by REST routes after persisting a new message.
- */
-export function broadcastToChannel(
-  channelId: string,
-  data: Record<string, unknown>
-) {
-  const subscribers = channelConnections.get(channelId);
-  if (!subscribers) return;
-
-  const payload = JSON.stringify({
-    type: "message",
-    channelId,
-    ...data,
-    timestamp: new Date().toISOString(),
-  });
-
-  for (const client of subscribers) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  }
-}
-
-/**
- * Get connection stats for a channel.
- */
-export function getChannelConnectionCount(channelId: string): number {
-  return channelConnections.get(channelId)?.size ?? 0;
-}
+attachWebSocket(httpServer);
 
 // ─── Error Handling ──────────────────────────────────────────
 // 404 catch-all for unmatched API routes
@@ -301,23 +119,53 @@ app.use(
   }
 );
 
+// ─── Process-Level Error Handling ─────────────────────────────
+// Catch uncaught exceptions (prevents silent crashes)
+process.on("uncaughtException", (err: Error) => {
+  const errorId = `${Date.now()}-uncaught`;
+  logger.error("Uncaught exception", {
+    errorId,
+    message: err.message,
+    stack: err.stack,
+  });
+  // Attempt graceful shutdown after logging
+  setTimeout(() => process.exit(1), 2000).unref();
+});
+
+// Catch unhandled promise rejections
+process.on("unhandledRejection", (reason: unknown) => {
+  const errorId = `${Date.now()}-rejection`;
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? reason.stack : undefined;
+  logger.error("Unhandled promise rejection", {
+    errorId,
+    message,
+    stack,
+  });
+});
+
+// Handle SIGTERM for graceful shutdown (in addition to the SIGINT handler below)
+process.on("SIGTERM", () => {
+  logger.info("Received SIGTERM signal, shutting down gracefully");
+  shutdown();
+});
+
 // ─── Start Server ────────────────────────────────────────────
 const server = httpServer.listen(PORT, () => {
-  console.log(
-    `Slack-for-AI server listening on port ${PORT} (HTTP + WS)`
-  );
-  console.log(`  REST API: http://localhost:${PORT}/api`);
-  console.log(`  WebSocket: ws://localhost:${PORT}/ws`);
-  console.log(`  Health:    http://localhost:${PORT}/health`);
+  logger.info("Slack-for-AI server started", {
+    port: PORT,
+    rest_api: `http://localhost:${PORT}/api`,
+    websocket: `ws://localhost:${PORT}/ws`,
+    health: `http://localhost:${PORT}/health`,
+    metrics: `http://localhost:${PORT}/api/metrics`,
+    environment: process.env.NODE_ENV ?? "development",
+  });
 });
 
 async function shutdown() {
-  console.log("Shutting down...");
+  logger.info("Shutting down server");
 
-  // Close all WebSocket connections gracefully
-  wss.clients.forEach((ws) => {
-    ws.close(1001, "Server shutting down");
-  });
+  // Close all WebSocket connections gracefully (handled by websocket.ts module)
 
   server.close();
   pool.end();

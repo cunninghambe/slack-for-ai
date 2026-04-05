@@ -42,6 +42,13 @@ export interface ApiBackendAgent {
   updatedAt: string;
 }
 
+export interface ApiReaction {
+  emoji: string;
+  count: number;
+  agentIds: string[];
+  userIds: string[];
+}
+
 export interface ApiResponse<T> {
   data?: T;
   error?: string;

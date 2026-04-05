@@ -1,23 +1,38 @@
-import { db, activityLog, messages } from "../db.js";
+import { Request, Response, NextFunction } from "express";
+import { db, activityLog, messages, type NewActivityLog } from "../db.js";
 import { eq, and, isNull, max } from "drizzle-orm";
 
+export function paramStr(req: Request, key: string): string {
+  const val = req.params[key];
+  return Array.isArray(val) ? val[0] ?? "" : val ?? "";
+}
+
+export function asyncHandler(
+  fn: (req: Request, res: Response) => Promise<void>
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    fn(req, res).catch(next);
+  };
+}
+
 export async function logActivity(opts: {
-  actor?: any;
+  actor?: { kind: string; id: string };
   companyId: string;
   action: string;
   entityType: string;
   entityId: string;
   details?: Record<string, unknown>;
 }): Promise<void> {
-  await db.insert(activityLog).values({
+  const data: NewActivityLog = {
     companyId: opts.companyId,
     actorType: opts.actor?.kind ?? "system",
     actorId: opts.actor?.id ?? null,
     action: opts.action,
     entityType: opts.entityType,
     entityId: opts.entityId,
-    details: (opts.details ?? {}) as any,
-  } as any);
+    details: opts.details ?? {},
+  };
+  await db.insert(activityLog).values(data);
 }
 
 export async function getNextSequenceNum(

@@ -1,20 +1,15 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { db, channels, messages, channelMemberships } from "../db.js";
-import { eq, and, isNull, desc, sql } from "drizzle-orm";
+import { db, channels, messages, channelMemberships, messageReactions, type NewMessage } from "../db.js";
+import { eq, and, isNull, desc, sql, type SQL, inArray } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
-import { broadcastToChannel } from "../index.js";
-import { logActivity, getNextSequenceNum } from "../utils/helpers.js";
+import { broadcastToChannel } from "../websocket.js";
+import { logActivity, getNextSequenceNum, paramStr, asyncHandler } from "../utils/helpers.js";
+import { COMPANY_ID } from "../config.js";
 
 const router = Router();
-const COMPANY_ID = "91d80478-1fd3-4025-8ec1-5bf3aed65665";
 
 router.use(authenticate);
-
-function strParam(req: Request, key: string): string {
-  const val = req.params[key];
-  return Array.isArray(val) ? val[0] ?? "" : val ?? "";
-}
 
 // Validation schemas
 const sendMessageSchema = z.object({
@@ -32,10 +27,11 @@ const editMessageSchema = z.object({
  * GET /api/channels/:channelId/messages - Get message history
  * Query params: limit (default 50), before (sequence number), parentId (for threads)
  */
-router.get("/:channelId/messages", async (req: Request, res: Response) => {
-  try {
+router.get(
+  "/:channelId/messages",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = strParam(req, "channelId");
+    const channelId = paramStr(req, "channelId");
 
     // Verify channel exists
     const channelRows = await db
@@ -83,14 +79,14 @@ router.get("/:channelId/messages", async (req: Request, res: Response) => {
     const before = req.query.before as string | undefined;
     const parentId = req.query.parentId as string | undefined;
 
-    const whereClauses = [
+    const whereClauses: (SQL | undefined)[] = [
       eq(messages.channelId, channelId),
       isNull(messages.deletedAt),
     ];
 
     if (before) {
       whereClauses.push(
-        sql`${messages.sequenceNum} < ${Number(before)}` as any
+        sql`${messages.sequenceNum} < ${Number(before)}`
       );
     }
 
@@ -124,23 +120,57 @@ router.get("/:channelId/messages", async (req: Request, res: Response) => {
       .orderBy(desc(messages.sequenceNum))
       .limit(limit);
 
+    // Fetch reactions for all messages and attach to each message
+    const messageIds = messageList.map((m) => m.id);
+    let reactions: typeof messageReactions.$inferSelect[] = [];
+    if (messageIds.length > 0) {
+      reactions = await db.select().from(messageReactions).where(inArray(messageReactions.messageId, messageIds));
+    }
+
+    // Group reactions by messageId and emoji
+    const reactionsByMessage = new Map<
+      string,
+      Map<string, { emoji: string; count: number; agentIds: string[]; userIds: string[] }>
+    >()
+    for (const r of reactions) {
+      let emojiMap = reactionsByMessage.get(r.messageId)
+      if (!emojiMap) {
+        emojiMap = new Map()
+        reactionsByMessage.set(r.messageId, emojiMap)
+      }
+      let grp = emojiMap.get(r.emoji)
+      if (!grp) {
+        grp = { emoji: r.emoji, count: 0, agentIds: [], userIds: [] }
+        emojiMap.set(r.emoji, grp)
+      }
+      grp.count++
+      if (r.agentId) grp.agentIds.push(r.agentId)
+      if (r.userId) grp.userIds.push(r.userId)
+    }
+
+    // Attach reactions to messages
+    const messagesWithReactions = messageList.map((m) => ({
+      ...m,
+      reactions: reactionsByMessage.get(m.id)
+        ? Array.from(reactionsByMessage.get(m.id)!.values())
+        : [],
+    }))
+
     res.json({
-      messages: messageList.reverse(),
-      hasMore: messageList.length >= limit,
+      messages: messagesWithReactions.reverse(),
+      hasMore: messagesWithReactions.length >= limit,
     });
-  } catch (err) {
-    console.error("Error fetching messages:", err);
-    res.status(500).json({ error: "Failed to fetch messages" });
-  }
-});
+  })
+);
 
 /**
  * POST /api/channels/:channelId/messages - Send a message
  */
-router.post("/:channelId/messages", async (req: Request, res: Response) => {
-  try {
+router.post(
+  "/:channelId/messages",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = strParam(req, "channelId");
+    const channelId = paramStr(req, "channelId");
 
     const validation = sendMessageSchema.safeParse(req.body);
     if (!validation.success) {
@@ -211,18 +241,19 @@ router.post("/:channelId/messages", async (req: Request, res: Response) => {
 
     const sequenceNum = await getNextSequenceNum(channelId, parentId ?? null);
 
+    const insertData: NewMessage = {
+      channelId,
+      parentId: parentId ?? null,
+      senderAgentId: actor.kind === "agent" ? actor.id : null,
+      senderUserId: actor.kind === "user" ? actor.id : null,
+      content: content ?? null,
+      messageType,
+      structuredPayload: (structuredPayload as Record<string, unknown>) ?? null,
+      sequenceNum,
+    };
     const inserted = await db
       .insert(messages)
-      .values({
-        channelId,
-        parentId: parentId ?? null,
-        senderAgentId: actor.kind === "agent" ? actor.id : null,
-        senderUserId: actor.kind === "user" ? actor.id : null,
-        content: content ?? null,
-        messageType,
-        structuredPayload: (structuredPayload as any) ?? null,
-        sequenceNum,
-      } as any)
+      .values(insertData)
       .returning();
 
     const newMessage = inserted[0];
@@ -232,10 +263,13 @@ router.post("/:channelId/messages", async (req: Request, res: Response) => {
       await db
         .update(messages)
         .set({
-          replyCount: sql`${messages.replyCount} + 1`,
-        } as any)
+          replyCount: sql`${messages.replyCount} + 1` as unknown as number,
+        })
         .where(eq(messages.id, parentId));
     }
+
+    // Broadcast the new message to all WebSocket subscribers of this channel
+    broadcastToChannel(channelId, { message: newMessage });
 
     await logActivity({
       actor,
@@ -247,18 +281,16 @@ router.post("/:channelId/messages", async (req: Request, res: Response) => {
     });
 
     res.status(201).json(newMessage);
-  } catch (err) {
-    console.error("Error sending message:", err);
-    res.status(500).json({ error: "Failed to send message" });
-  }
-});
+  })
+);
 
 /**
  * GET /api/channels/:channelId/messages/:id - Get a single message
  */
-router.get("/:channelId/messages/:id", async (req: Request, res: Response) => {
-  try {
-    const id = strParam(req, "id");
+router.get(
+  "/:channelId/messages/:id",
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = paramStr(req, "id");
 
     const rows = await db
       .select()
@@ -272,77 +304,70 @@ router.get("/:channelId/messages/:id", async (req: Request, res: Response) => {
     }
 
     res.json(rows[0]);
-  } catch (err) {
-    console.error("Error fetching message:", err);
-    res.status(500).json({ error: "Failed to fetch message" });
-  }
-});
+  })
+);
 
 /**
  * PATCH /api/channels/:channelId/messages/:id - Edit a message
  */
 router.patch(
   "/:channelId/messages/:id",
-  async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const id = strParam(req, "id");
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = req.actor!;
+    const id = paramStr(req, "id");
 
-      const validation = editMessageSchema.safeParse(req.body);
-      if (!validation.success) {
-        res.status(422).json({
-          error: "Validation failed",
-          details: validation.error.flatten(),
-        });
-        return;
-      }
-
-      const existing = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.id, id), isNull(messages.deletedAt)))
-        .limit(1);
-
-      if (existing.length === 0) {
-        res.status(404).json({ error: "Message not found" });
-        return;
-      }
-
-      const msg = existing[0];
-
-      // Only sender can edit
-      if (
-        (actor.kind === "agent" && msg.senderAgentId !== actor.id) ||
-        (actor.kind === "user" && msg.senderUserId !== actor.id)
-      ) {
-        res.status(403).json({ error: "Not authorized to edit this message" });
-        return;
-      }
-
-      const updated = await db
-        .update(messages)
-        .set({
-          content: validation.data.content,
-          edited: true,
-          editedAt: new Date(),
-        } as any)
-        .where(eq(messages.id, id))
-        .returning();
-
-      await logActivity({
-        actor,
-        companyId: COMPANY_ID,
-        action: "message.edited",
-        entityType: "message",
-        entityId: id,
+    const validation = editMessageSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(422).json({
+        error: "Validation failed",
+        details: validation.error.flatten(),
       });
-
-      res.json(updated[0]);
-    } catch (err) {
-      console.error("Error editing message:", err);
-      res.status(500).json({ error: "Failed to edit message" });
+      return;
     }
-  }
+
+    const existing = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, id), isNull(messages.deletedAt)))
+      .limit(1);
+
+    if (existing.length === 0) {
+      res.status(404).json({ error: "Message not found" });
+      return;
+    }
+
+    const msg = existing[0];
+
+    // Only sender can edit
+    if (
+      (actor.kind === "agent" && msg.senderAgentId !== actor.id) ||
+      (actor.kind === "user" && msg.senderUserId !== actor.id)
+    ) {
+      res.status(403).json({ error: "Not authorized to edit this message" });
+      return;
+    }
+
+    const updated = await db
+      .update(messages)
+      .set({
+        content: validation.data.content,
+        edited: true,
+        editedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(messages.id, id))
+      .returning();
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "message.edited",
+      entityType: "message",
+      entityId: id,
+    });
+
+    res.json(updated[0]);
+  })
 );
 
 /**
@@ -350,57 +375,53 @@ router.patch(
  */
 router.delete(
   "/:channelId/messages/:id",
-  async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const id = strParam(req, "id");
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = req.actor!;
+    const id = paramStr(req, "id");
 
-      const existing = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.id, id), isNull(messages.deletedAt)))
-        .limit(1);
+    const existing = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.id, id), isNull(messages.deletedAt)))
+      .limit(1);
 
-      if (existing.length === 0) {
-        res.status(404).json({ error: "Message not found" });
-        return;
-      }
-
-      const msg = existing[0];
-
-      // Only sender can delete
-      if (
-        (actor.kind === "agent" && msg.senderAgentId !== actor.id) ||
-        (actor.kind === "user" && msg.senderUserId !== actor.id)
-      ) {
-        res.status(403).json({ error: "Not authorized to delete this message" });
-        return;
-      }
-
-      await db
-        .update(messages)
-        .set({
-          deleted: true,
-          deletedAt: new Date(),
-          deletedByAgentId: actor.kind === "agent" ? actor.id : null,
-          deletedByUserId: actor.kind === "user" ? actor.id : null,
-        } as any)
-        .where(eq(messages.id, id));
-
-      await logActivity({
-        actor,
-        companyId: COMPANY_ID,
-        action: "message.deleted",
-        entityType: "message",
-        entityId: id,
-      });
-
-      res.json({ success: true });
-    } catch (err) {
-      console.error("Error deleting message:", err);
-      res.status(500).json({ error: "Failed to delete message" });
+    if (existing.length === 0) {
+      res.status(404).json({ error: "Message not found" });
+      return;
     }
-  }
+
+    const msg = existing[0];
+
+    // Only sender can delete
+    if (
+      (actor.kind === "agent" && msg.senderAgentId !== actor.id) ||
+      (actor.kind === "user" && msg.senderUserId !== actor.id)
+    ) {
+      res.status(403).json({ error: "Not authorized to delete this message" });
+      return;
+    }
+
+    await db
+      .update(messages)
+      .set({
+        deleted: true,
+        deletedAt: new Date(),
+        deletedByAgentId: actor.kind === "agent" ? actor.id : null,
+        deletedByUserId: actor.kind === "user" ? actor.id : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(messages.id, id));
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "message.deleted",
+      entityType: "message",
+      entityId: id,
+    });
+
+    res.json({ success: true });
+  })
 );
 
 export default router;

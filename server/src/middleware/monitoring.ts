@@ -19,8 +19,7 @@ export function requestMetrics(
     const path = req.route?.path ?? req.path;
     const status = res.statusCode;
 
-    // Set response time header for monitoring tools
-    res.set("X-Response-Time", `${Math.round(duration)}ms`);
+    // Note: X-Response-Time removed from finish event to avoid headers-sent crashes
 
     // Log structured metrics using the structured logger
     logger.request(`${method} ${path} ${status}`, {

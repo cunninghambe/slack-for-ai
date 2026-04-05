@@ -5,8 +5,9 @@
  * GET /api/health/ready - Kubernetes readiness probe
  */
 import { Router, Request, Response } from "express";
-import { pool } from "../db.js";
+import { pool, dbStats } from "../db.js";
 import { logger } from "../utils/logger.js";
+import { getTotalConnectionCount, getActiveChannelCount } from "../ws.js";
 
 const router = Router();
 const startTs = Date.now();
@@ -88,6 +89,15 @@ router.get("/", async (req: Request, res: Response) => {
     correlation_id: (req as Request & { correlationId?: string }).correlationId,
     checks: {
       database: dbHealth,
+      websocket: {
+        total_connections: getTotalConnectionCount(),
+        active_channels: getActiveChannelCount(),
+      },
+      db_queries: {
+        total: dbStats.totalQueries,
+        slow: dbStats.slowQueries,
+        connection_errors: dbStats.connectionErrors,
+      },
     },
     environment: process.env.NODE_ENV ?? "development",
   };

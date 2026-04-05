@@ -91,6 +91,18 @@ export async function addReaction(
   return res.json();
 }
 
+export async function removeReaction(
+  messageId: string,
+  emoji: string,
+): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to remove reaction: ${res.status}`);
+  return res.json();
+}
+
 export async function getThread(
   parentMessageId: string,
   channelId: string,

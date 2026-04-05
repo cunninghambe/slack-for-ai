@@ -1,5 +1,8 @@
+import { useState, useCallback } from 'react'
 import Avatar from './Avatar'
+import EmojiPicker from './EmojiPicker'
 import ToolCallBlock from './ToolCallBlock'
+import MessageToolbar from './MessageToolbar'
 import { Message } from '../types'
 import { formatMessageTime } from '../utils'
 import ReactMarkdown from 'react-markdown'
@@ -10,10 +13,14 @@ interface MessageBubbleProps {
   groupedWithPrevious: boolean
   onThreadClick?: () => void
   onReaction?: (messageId: string, emoji: string) => void
+  onReplyClick?: () => void
+  currentUserId?: string
 }
 
-export default function MessageBubble({ message, groupedWithPrevious, onThreadClick, onReaction }: MessageBubbleProps) {
+export default function MessageBubble({ message, groupedWithPrevious, onThreadClick, onReaction, onReplyClick, currentUserId }: MessageBubbleProps) {
   const isAgent = message.sender.isAgent
+  const [showPicker, setShowPicker] = useState(false)
+  const [hovering, setHovering] = useState(false)
 
   const avatar = !groupedWithPrevious ? (
     <div style={{ width: 36, marginRight: 12, paddingTop: 2 }}>
@@ -25,8 +32,31 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
 
   const bgStyle = isAgent ? { background: 'var(--agent-bg)', borderRadius: 'var(--radius-md)', padding: 'var(--space-2)', borderLeft: '2px solid var(--agent-border)' } : {}
 
+  const handleReactionSelect = useCallback((emoji: string) => {
+    setShowPicker(false)
+    if (onReaction) {
+      onReaction(message.id, emoji)
+    }
+  }, [onReaction, message.id])
+
+  const handleReactionClick = useCallback((emoji: string) => {
+    if (onReaction) {
+      // Toggle: if user already reacted with this emoji, send it again to remove; otherwise to add
+      onReaction(message.id, emoji)
+    }
+  }, [onReaction, message.id])
+
+  // Check if current user already reacted with a given emoji
+  const userReacted = useCallback((r: Message['reactions'][0]) => {
+    if (!currentUserId) return false
+    return r.users.includes(currentUserId)
+  }, [currentUserId])
+
   return (
-    <div
+    <article
+      role="article"
+      aria-label={`Message from ${message.sender.name} at ${formatMessageTime(message.timestamp)}: ${message.content?.substring(0, 80) ?? 'No text content'}`}
+      data-message-id={message.id}
       style={{
         display: 'flex',
         padding: groupedWithPrevious ? '2px var(--space-6)' : 'var(--space-4) var(--space-6) var(--space-2)',
@@ -34,20 +64,32 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
         transition: 'background 0.1s',
         ...bgStyle,
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = isAgent ? 'var(--agent-bg)' : 'rgba(255,255,255,0.02)')}
-      onMouseLeave={(e) => (e.currentTarget.style.background = isAgent ? 'var(--agent-bg)' : 'transparent')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = isAgent ? 'var(--agent-bg)' : 'rgba(255,255,255,0.02)'
+        setHovering(true)
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = isAgent ? 'var(--agent-bg)' : 'transparent'
+        setHovering(false)
+      }}
     >
       {avatar}
 
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+        {hovering && (onReplyClick || onReaction) && (
+          <MessageToolbar
+            onReply={() => onReplyClick?.()}
+            onReact={() => setShowPicker((p) => !p)}
+          />
+        )}
         {!groupedWithPrevious && (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
               {message.sender.name}
             </span>
-            <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+            <time style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
               {formatMessageTime(message.timestamp)}
-            </span>
+            </time>
           </div>
         )}
 
@@ -63,7 +105,7 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 'var(--space-3)', color: 'var(--text-primary)' }}>
-              {'\uD83D\uDCCA'} {message.sender.name} — Summary
+              {'\\uD83D\\uDCCA'} {message.sender.name} — Summary
             </div>
             {Object.entries(message.structuredData).map(([key, value]) => (
               <div
@@ -101,13 +143,15 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
 
         {/* Reactions */}
         {(message.reactions.length > 0 || onReaction) && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 'var(--space-2)', alignItems: 'center' }}>
+          <div style={{ position: 'relative', display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 'var(--space-2)', alignItems: 'center' }}>
             {message.reactions.map((r, idx) => (
-              <span
+              <button
                 key={idx}
+                role="button"
+                aria-label={`${r.count} ${r.emoji} reactions`}
                 style={{
-                  background: 'var(--bg-elevated)',
-                  border: '1px solid rgba(255,255,255,0.08)',
+                  background: userReacted(r) ? 'rgba(255,255,255,0.12)' : 'var(--bg-elevated)',
+                  border: userReacted(r) ? '1px solid var(--accent-primary, #4a9eff)' : '1px solid rgba(255,255,255,0.08)',
                   borderRadius: 'var(--radius-full)',
                   padding: '2px 8px',
                   fontSize: 12,
@@ -117,31 +161,36 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
                   cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)')}
-                onClick={() => onReaction?.(message.id, r.emoji)}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = userReacted(r) ? 'var(--accent-primary, #4a9eff)' : 'rgba(255,255,255,0.08)')}
+                onClick={() => handleReactionClick(r.emoji)}
               >
                 <span>{r.emoji}</span>
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{r.count}</span>
-              </span>
+              </button>
             ))}
             {onReaction && (
-              <button
-                style={{
-                  background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 'var(--radius-full)',
-                  padding: '2px 6px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  opacity: 0.6,
-                }}
-                onClick={() => onReaction(message.id, '\u{1F44D}')}
-                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
-                title="Add thumbs up reaction"
-              >
-                +
-              </button>
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                {showPicker && (
+                  <EmojiPicker onSelect={handleReactionSelect} onClose={() => setShowPicker(false)} />
+                )}
+                <button
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 'var(--radius-full)',
+                    padding: '2px 6px',
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    opacity: showPicker ? 1 : 0.6,
+                  }}
+                  onClick={() => setShowPicker((prev) => !prev)}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
+                  title="Add reaction"
+                >
+                  +
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -149,6 +198,7 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
         {message.threadCount && message.threadCount > 0 && (
           <button
             onClick={onThreadClick}
+            aria-label={`View thread with ${message.threadCount} ${message.threadCount === 1 ? 'reply' : 'replies'}`}
             style={{
               background: 'transparent',
               border: 'none',
@@ -165,6 +215,6 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
           </button>
         )}
       </div>
-    </div>
+    </article>
   )
 }

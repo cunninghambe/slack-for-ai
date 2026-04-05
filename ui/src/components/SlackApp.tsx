@@ -1,56 +1,56 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Channel, Message, User } from '../types'
+import { useState, useCallback } from 'react'
+import { Channel, Message } from '../types'
 import ChannelSidebar from './ChannelSidebar'
 import ChannelHeader from './ChannelHeader'
 import MessageBubble from './MessageBubble'
 import MessageComposer from './MessageComposer'
 import ThreadView from './ThreadView'
 import CreateChannelModal from './CreateChannelModal'
-import { getMessages as apiGetMessages, sendMessage as apiSendMessage, getThread as apiGetThread, addReaction as apiAddReaction } from '../api/client'
-import { mapApiMessage } from '../api/mappers'
+import TypingIndicator from './TypingIndicator'
+import { useThread } from '../hooks/useMessages'
+import { sendMessage as apiSendMessage } from '../api/client'
 import { currentActor } from '../api/mappers'
-import type { ApiMessage } from '../api/types'
+import type { WSConnectionState } from '../hooks/useWebSocket'
 
 interface SlackAppProps {
   channels: Channel[]
-  messages: Record<string, Message[]>
+  messages: Message[]
   activeChannelId: string | null
+  activeChannel: Channel | null
   loadingMessages: boolean
+  typingUsers: string[]
+  connectionState: WSConnectionState
   onChannelSelect: (channelId: string) => void
   onCreateChannel: (name: string, description: string, type: 'public' | 'private') => Promise<Channel>
   onSendMessage: (content: string) => Promise<Message | undefined>
   onReaction: (messageId: string, emoji: string) => void
+  onUserTyping?: () => void
+  setMessages: React.Dispatch<React.SetStateAction<Record<string, Message[]>>>
 }
 
 export default function SlackApp({
   channels,
-  messages: initialMessages,
+  messages,
   activeChannelId,
+  activeChannel,
   loadingMessages,
+  typingUsers,
+  connectionState,
   onChannelSelect,
   onCreateChannel,
   onSendMessage,
   onReaction,
+  onUserTyping,
+  setMessages,
 }: SlackAppProps) {
-  // Local state
-  const [messages, setMessages] = useState<Record<string, Message[]>>(initialMessages)
-  const [openThread, setOpenThread] = useState<{ parentId: string; channel: Channel; replies: Message[] } | null>(null)
   const [showCreateChannel, setShowCreateChannel] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
-  const [threadMessages, setThreadMessages] = useState<Record<string, Message[]>>({})
-
-  // Keep local messages in sync with prop changes
-  useEffect(() => {
-    setMessages(initialMessages)
-  }, [initialMessages])
-
-  const activeChannel = channels.find((c) => c.id === activeChannelId) ?? null
-  const activeMessages = activeChannelId ? messages[activeChannelId] ?? [] : []
+  const { openThread, loading: threadLoading, open: openThreadFn, close: closeThreadFn, setOpenThread } = useThread()
 
   // Group messages: collapse consecutive messages from same sender
-  const groupedMessages = activeMessages.map((msg, i) => {
-    const prev = activeMessages[i - 1]
+  const groupedMessages = messages.map((msg, i) => {
+    const prev = messages[i - 1]
     const isGrouped = prev && prev.sender.id === msg.sender.id
     return { msg, grouped: !!isGrouped }
   })
@@ -59,51 +59,38 @@ export default function SlackApp({
   const handleThreadClick = useCallback(async (messageId: string) => {
     if (!activeChannel) return
     try {
-      const channel = channels.find((c) => c.id === activeChannelId)!
-      const { parent, replies } = await apiGetThread(messageId, channel.id)
-      setThreadMessages((prev) => ({ ...prev, [messageId]: replies }))
-      setOpenThread({ parentId: messageId, channel, replies })
+      openThreadFn(messageId, activeChannelId!)
     } catch (err) {
       console.error('Failed to fetch thread:', err)
-      // Open thread with local data
-      const channel = channels.find((c) => c.id === activeChannelId)!
-      const parentMsg = activeMessages.find((m) => m.id === messageId)
-      if (parentMsg) {
-        setOpenThread({ parentId: messageId, channel, replies: [] })
-      }
     }
-  }, [activeChannel, activeChannelId, activeMessages, channels])
+  }, [activeChannel, activeChannelId, openThreadFn])
 
   const handleThreadMessage = useCallback(async (content: string) => {
-    if (!openThread) return
+    if (!openThread || !activeChannel) return
     try {
-      const newReply = await apiSendMessage(openThread.channel.id, content, openThread.parentId)
-      // Update parent message reply count
+      const newReply = await apiSendMessage(activeChannel.id, content, openThread.parentId)
+      // Update parent message reply count and append to messages list
       setMessages((prev) => {
-        const channelMsgs = prev[openThread.channel.id]
+        const channelMsgs = prev[openThread.channelId]
         if (channelMsgs) {
           const updated = channelMsgs.map((m) =>
-            m.id === openThread!.parentId
+            m.id === openThread.parentId
               ? { ...m, threadCount: (m.threadCount || 0) + 1 }
               : m
           )
           return {
             ...prev,
-            [openThread!.channel.id]: [...updated, newReply],
+            [openThread.channelId]: [...updated, newReply],
           }
         }
         return prev
       })
-      // Append to thread
-      setThreadMessages((prev) => ({
-        ...prev,
-        [openThread.parentId]: [...(prev[openThread.parentId] || []), newReply],
-      }))
+      // Update local thread state
       setOpenThread((prev) => prev ? { ...prev, replies: [...prev.replies, newReply] } : null)
     } catch (err) {
       console.error('Failed to send thread message:', err)
     }
-  }, [openThread])
+  }, [openThread, activeChannel, setMessages, setOpenThread])
 
   // Send message
   const handleSend = useCallback(async (content: string) => {
@@ -135,6 +122,14 @@ export default function SlackApp({
   const handleReactionClick = useCallback(async (messageId: string, emoji: string) => {
     onReaction(messageId, emoji)
   }, [onReaction])
+
+  // Map thread messages for display
+  const threadReplies = openThread && activeChannel
+    ? [...openThread.replies]
+    : []
+  const threadParent = openThread && activeChannel
+    ? messages.find((m) => m.id === openThread.parentId)
+    : null
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
@@ -195,11 +190,22 @@ export default function SlackApp({
                       groupedWithPrevious={g}
                       onThreadClick={() => handleThreadClick(m.id)}
                       onReaction={handleReactionClick}
+                      onReplyClick={() => handleThreadClick(m.id)}
                     />
                   ))}
                 </>
               )}
             </div>
+
+            {/* Typing indicator */}
+            <TypingIndicator users={typingUsers} visible={typingUsers.length > 0} />
+
+            {/* Connection state indicator */}
+            {connectionState === 'disconnected' && (
+              <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--warning)', padding: '2px 0' }}>
+                Disconnected — attempting to reconnect...
+              </div>
+            )}
 
             {/* Message input */}
             <div
@@ -211,6 +217,7 @@ export default function SlackApp({
               <MessageComposer
                 channelName={activeChannel.name}
                 onSend={handleSend}
+                onTyping={onUserTyping}
                 disabled={sendingMessage}
               />
             </div>
@@ -231,15 +238,13 @@ export default function SlackApp({
       </div>
 
       {/* Thread panel */}
-      {openThread && (
+      {openThread && activeChannel && threadParent && (
         <ThreadView
-          parentMessage={
-            activeMessages.find((m) => m.id === openThread.parentId)!
-          }
-          replies={openThread.replies || []}
-          channel={openThread.channel}
+          parentMessage={threadParent}
+          replies={threadReplies}
+          channel={activeChannel}
           currentUserId={currentActor.id}
-          onClose={() => setOpenThread(null)}
+          onClose={closeThreadFn}
           onSendMessage={handleThreadMessage}
         />
       )}

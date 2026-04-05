@@ -1,5 +1,5 @@
-import type { Channel, Message, User } from '../types';
-import type { ApiChannel, ApiMessage, ApiBackendAgent } from './types';
+import type { Channel, Message, User, Reaction } from '../types';
+import type { ApiChannel, ApiMessage, ApiBackendAgent, ApiReaction } from './types';
 
 const FRONTEND_AGENT_ID = import.meta.env.VITE_AGENT_ID || '777465c9-8b3a-4388-ae65-22744b6c9daf';
 
@@ -21,7 +21,7 @@ export function mapApiChannel(api: ApiChannel): Channel {
   switch (api.channelType) {
     case 'private': type = 'private'; break;
     case 'dm': type = 'dm'; break;
-    case 'group_dm': type = 'group-dm'; break;
+    case 'group_dm': type = 'group_dm'; break;
     default: type = 'public';
   }
 
@@ -52,7 +52,17 @@ export function mapApiMessage(
     name: api.senderAgentId ? 'Agent' : api.senderUserId ? 'User' : 'Unknown',
     isAgent: !!api.senderAgentId,
     status: 'available',
-  };
+  }
+
+  // Map reactions if included in the API response (now attached by backend)
+  const rawReactions = (api as any).reactions as ApiReaction[] | undefined
+  const reactions: Reaction[] = rawReactions
+    ? rawReactions.map((r) => ({
+        emoji: r.emoji,
+        count: r.count,
+        users: [...(r.agentIds || []), ...(r.userIds || [])],
+      }))
+    : []
 
   return {
     id: api.id,
@@ -61,11 +71,11 @@ export function mapApiMessage(
     content: api.content || '',
     timestamp: new Date(api.createdAt),
     parentId: api.parentId || undefined,
-    reactions: [], // TODO: fetch from reactions endpoint
+    reactions,
     threadCount: api.replyCount > 0 ? api.replyCount : undefined,
     isStructured: api.messageType === 'structured',
     structuredData: (api.structuredPayload || undefined) as Record<string, string | number> | undefined,
-  };
+  }
 }
 
 /** The current user / actor for the frontend */

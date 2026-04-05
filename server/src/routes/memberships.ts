@@ -17,13 +17,14 @@ import {
   channelMemberships,
   agents as agentsTable,
   authUsers,
+  type NewChannelMembership,
 } from "../db.js";
 import { eq, and, isNull, or, inArray } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
-import { logActivity } from "../utils/helpers.js";
+import { logActivity, paramStr, asyncHandler } from "../utils/helpers.js";
+import { COMPANY_ID } from "../config.js";
 
 const router = Router();
-const COMPANY_ID = "91d80478-1fd3-4025-8ec1-5bf3aed65665";
 
 router.use(authenticate);
 router.use(requireCompany(COMPANY_ID));
@@ -95,10 +96,11 @@ async function findChannel(channelId: string) {
 // GET /api/channels/:channelId/members
 // List all current members of a channel (with agent/user names)
 // ============================================================
-router.get("/:channelId/members", async (req: Request, res: Response) => {
-  try {
+router.get(
+  "/:channelId/members",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = req.params.channelId as string;
+    const channelId = paramStr(req, "channelId");
 
     const channel = await findChannel(channelId);
     if (!channel) {
@@ -158,20 +160,18 @@ router.get("/:channelId/members", async (req: Request, res: Response) => {
     }));
 
     res.json({ members, count: members.length });
-  } catch (err) {
-    console.error("Error listing channel members:", err);
-    res.status(500).json({ error: "Failed to list channel members" });
-  }
-});
+  })
+);
 
 // ============================================================
 // GET /api/channels/:channelId/members/me
 // Check own membership status in a channel
 // ============================================================
-router.get("/:channelId/members/me", async (req: Request, res: Response) => {
-  try {
+router.get(
+  "/:channelId/members/me",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = req.params.channelId as string;
+    const channelId = paramStr(req, "channelId");
 
     const channel = await findChannel(channelId);
     if (!channel) {
@@ -191,20 +191,18 @@ router.get("/:channelId/members/me", async (req: Request, res: Response) => {
       role: membership.role,
       joinedAt: membership.joinedAt,
     });
-  } catch (err) {
-    console.error("Error checking membership:", err);
-    res.status(500).json({ error: "Failed to check membership" });
-  }
-});
+  })
+);
 
 // ============================================================
 // POST /api/channels/:channelId/members
 // Add one or more agents/users to a channel
 // ============================================================
-router.post("/:channelId/members", async (req: Request, res: Response) => {
-  try {
+router.post(
+  "/:channelId/members",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = req.params.channelId as string;
+    const channelId = paramStr(req, "channelId");
 
     const channel = await findChannel(channelId);
     if (!channel) {
@@ -247,13 +245,14 @@ router.post("/:channelId/members", async (req: Request, res: Response) => {
           continue; // skip already a member
         }
 
+        const agentMembership: NewChannelMembership = {
+          channelId,
+          agentId,
+          role,
+        };
         const [inserted] = await db
           .insert(channelMemberships)
-          .values({
-            channelId,
-            agentId,
-            role,
-          } as any)
+          .values(agentMembership)
           .returning();
 
         added.push({ kind: "agent", id: agentId });
@@ -275,13 +274,14 @@ router.post("/:channelId/members", async (req: Request, res: Response) => {
           continue;
         }
 
+        const userMembership: NewChannelMembership = {
+          channelId,
+          userId,
+          role,
+        };
         const [inserted] = await db
           .insert(channelMemberships)
-          .values({
-            channelId,
-            userId,
-            role,
-          } as any)
+          .values(userMembership)
           .returning();
 
         added.push({ kind: "user", id: userId });
@@ -298,11 +298,8 @@ router.post("/:channelId/members", async (req: Request, res: Response) => {
     });
 
     res.status(201).json({ added, total: added.length });
-  } catch (err) {
-    console.error("Error adding members:", err);
-    res.status(500).json({ error: "Failed to add members" });
-  }
-});
+  })
+);
 
 // ============================================================
 // PATCH /api/channels/:channelId/members/:memberId
@@ -310,68 +307,63 @@ router.post("/:channelId/members", async (req: Request, res: Response) => {
 // ============================================================
 router.patch(
   "/:channelId/members/:memberId",
-  async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const channelId = req.params.channelId as string;
-    const memberId = req.params.memberId as string;
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = req.actor!;
+    const channelId = paramStr(req, "channelId");
+    const memberId = paramStr(req, "memberId");
 
-      const channel = await findChannel(channelId);
-      if (!channel) {
-        res.status(404).json({ error: "Channel not found" });
-        return;
-      }
-
-      // Require admin to update roles
-      const isAdmin = await requireAdmin(channelId, actor);
-      if (!isAdmin) {
-        res.status(403).json({ error: "Only channel admins can update roles" });
-        return;
-      }
-
-      const validation = updateMemberSchema.safeParse(req.body);
-      if (!validation.success) {
-        res.status(422).json({
-          error: "Validation failed",
-          details: validation.error.flatten(),
-        });
-        return;
-      }
-
-      const membership = await db.query.channelMemberships.findFirst({
-        where: and(
-          eq(channelMemberships.id, memberId),
-          eq(channelMemberships.channelId, channelId),
-          isNull(channelMemberships.leftAt)
-        ),
-      });
-
-      if (!membership) {
-        res.status(404).json({ error: "Membership not found" });
-        return;
-      }
-
-      const [updated] = await db
-        .update(channelMemberships)
-        .set({ role: validation.data.role } as any)
-        .where(eq(channelMemberships.id, memberId))
-        .returning();
-
-      await logActivity({
-        actor,
-        companyId: COMPANY_ID,
-        action: "channel.member.role_updated",
-        entityType: "channel",
-        entityId: channelId,
-        details: { memberId, fromRole: membership.role, toRole: validation.data.role },
-      });
-
-      res.json(updated);
-    } catch (err) {
-      console.error("Error updating member role:", err);
-      res.status(500).json({ error: "Failed to update member role" });
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
     }
-  }
+
+    // Require admin to update roles
+    const isAdmin = await requireAdmin(channelId, actor);
+    if (!isAdmin) {
+      res.status(403).json({ error: "Only channel admins can update roles" });
+      return;
+    }
+
+    const validation = updateMemberSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(422).json({
+        error: "Validation failed",
+        details: validation.error.flatten(),
+      });
+      return;
+    }
+
+    const membership = await db.query.channelMemberships.findFirst({
+      where: and(
+        eq(channelMemberships.id, memberId),
+        eq(channelMemberships.channelId, channelId),
+        isNull(channelMemberships.leftAt)
+      ),
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: "Membership not found" });
+      return;
+    }
+
+    const [updated] = await db
+      .update(channelMemberships)
+      .set({ role: validation.data.role })
+      .where(eq(channelMemberships.id, memberId))
+      .returning();
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "channel.member.role_updated",
+      entityType: "channel",
+      entityId: channelId,
+      details: { memberId, fromRole: membership.role, toRole: validation.data.role },
+    });
+
+    res.json(updated);
+  })
 );
 
 // ============================================================
@@ -380,70 +372,66 @@ router.patch(
 // ============================================================
 router.delete(
   "/:channelId/members/:memberId",
-  async (req: Request, res: Response) => {
-    try {
-      const actor = req.actor!;
-      const channelId = req.params.channelId as string;
-    const memberId = req.params.memberId as string;
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = req.actor!;
+    const channelId = paramStr(req, "channelId");
+    const memberId = paramStr(req, "memberId");
 
-      const channel = await findChannel(channelId);
-      if (!channel) {
-        res.status(404).json({ error: "Channel not found" });
-        return;
-      }
-
-      // Require admin to remove others
-      const isAdmin = await requireAdmin(channelId, actor);
-      if (!isAdmin) {
-        res.status(403).json({ error: "Only channel admins can remove members" });
-        return;
-      }
-
-      const membership = await db.query.channelMemberships.findFirst({
-        where: and(
-          eq(channelMemberships.id, memberId),
-          eq(channelMemberships.channelId, channelId),
-          isNull(channelMemberships.leftAt)
-        ),
-      });
-
-      if (!membership) {
-        res.status(404).json({ error: "Membership not found or already removed" });
-        return;
-      }
-
-      // Soft-delete by setting leftAt
-      const [updated] = await db
-        .update(channelMemberships)
-        .set({ leftAt: new Date() } as any)
-        .where(eq(channelMemberships.id, memberId))
-        .returning();
-
-      await logActivity({
-        actor,
-        companyId: COMPANY_ID,
-        action: "channel.member.removed",
-        entityType: "channel",
-        entityId: channelId,
-        details: { memberId, removedBy: actor.id },
-      });
-
-      res.json({ success: true });
-    } catch (err) {
-      console.error("Error removing member:", err);
-      res.status(500).json({ error: "Failed to remove member" });
+    const channel = await findChannel(channelId);
+    if (!channel) {
+      res.status(404).json({ error: "Channel not found" });
+      return;
     }
-  }
+
+    // Require admin to remove others
+    const isAdmin = await requireAdmin(channelId, actor);
+    if (!isAdmin) {
+      res.status(403).json({ error: "Only channel admins can remove members" });
+      return;
+    }
+
+    const membership = await db.query.channelMemberships.findFirst({
+      where: and(
+        eq(channelMemberships.id, memberId),
+        eq(channelMemberships.channelId, channelId),
+        isNull(channelMemberships.leftAt)
+      ),
+    });
+
+    if (!membership) {
+      res.status(404).json({ error: "Membership not found or already removed" });
+      return;
+    }
+
+    // Soft-delete by setting leftAt
+    const [updated] = await db
+      .update(channelMemberships)
+      .set({ leftAt: new Date() })
+      .where(eq(channelMemberships.id, memberId))
+      .returning();
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "channel.member.removed",
+      entityType: "channel",
+      entityId: channelId,
+      details: { memberId, removedBy: actor.id },
+    });
+
+    res.json({ success: true });
+  })
 );
 
 // ============================================================
 // DELETE /api/channels/:channelId/members/me
 // Leave channel (self-removal)
 // ============================================================
-router.delete("/:channelId/members/me", async (req: Request, res: Response) => {
-  try {
+router.delete(
+  "/:channelId/members/me",
+  asyncHandler(async (req: Request, res: Response) => {
     const actor = req.actor!;
-    const channelId = req.params.channelId as string;
+    const channelId = paramStr(req, "channelId");
 
     const channel = await findChannel(channelId);
     if (!channel) {
@@ -462,7 +450,7 @@ router.delete("/:channelId/members/me", async (req: Request, res: Response) => {
 
     await db
       .update(channelMemberships)
-      .set({ leftAt: new Date() } as any)
+      .set({ leftAt: new Date() })
       .where(eq(channelMemberships.id, membership.id));
 
     await logActivity({
@@ -475,10 +463,7 @@ router.delete("/:channelId/members/me", async (req: Request, res: Response) => {
     });
 
     res.json({ success: true });
-  } catch (err) {
-    console.error("Error leaving channel:", err);
-    res.status(500).json({ error: "Failed to leave channel" });
-  }
-});
+  })
+);
 
 export default router;

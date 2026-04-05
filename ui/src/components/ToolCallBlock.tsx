@@ -106,6 +106,8 @@ export default function ToolCallBlock({ toolCall, agentName }: ToolCallBlockProp
         <div style={{ marginBottom: 'var(--space-2)' }}>
           <button
             onClick={() => setParamsExpanded(!paramsExpanded)}
+            aria-expanded={paramsExpanded}
+            aria-controls={`toolcall-params-${toolCall.id}`}
             style={{
               background: 'rgba(0,0,0,0.2)',
               border: 'none',
@@ -152,6 +154,8 @@ export default function ToolCallBlock({ toolCall, agentName }: ToolCallBlockProp
         <div>
           <button
             onClick={() => setOutputExpanded(!outputExpanded)}
+            aria-expanded={outputExpanded}
+            aria-controls={`toolcall-output-${toolCall.id}`}
             style={{
               background: 'rgba(0,0,0,0.2)',
               border: 'none',

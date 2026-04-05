@@ -4,10 +4,11 @@ interface MessageComposerProps {
   channelName: string
   placeholder?: string
   onSend: (content: string) => void
+  onTyping?: () => void
   disabled?: boolean
 }
 
-export default function MessageComposer({ channelName, placeholder, onSend, disabled }: MessageComposerProps) {
+export default function MessageComposer({ channelName, placeholder, onSend, onTyping, disabled }: MessageComposerProps) {
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -35,6 +36,10 @@ export default function MessageComposer({ channelName, placeholder, onSend, disa
     if (el) {
       el.style.height = 'auto'
       el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    }
+    // Notify parent that user is typing
+    if (onTyping && e.target.value.length > 0) {
+      onTyping()
     }
   }
 

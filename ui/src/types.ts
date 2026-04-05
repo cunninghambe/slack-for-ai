@@ -42,7 +42,7 @@ export interface Channel {
   id: string;
   name: string;
   description?: string;
-  type: 'public' | 'private' | 'dm' | 'group-dm';
+  type: 'public' | 'private' | 'dm' | 'group_dm';
   memberCount: number;
   unreadCount: number;
   lastMessageAt?: Date;
