@@ -32,6 +32,7 @@ interface WSMessage {
 
 interface UseWebSocketReturn {
   connectionState: WSConnectionState
+  currentUserId: string | null
   connect: () => void
   disconnect: () => void
   subscribe: (channelId: string) => void
@@ -46,6 +47,8 @@ export function useWebSocket(): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [connectionState, setConnectionState] = useState<WSConnectionState>('disconnected')
+  // Populated from the server's 'connected' handshake message (actorId field)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const messageHandlersRef = useRef<Set<(msg: Message) => void>>(new Set())
   const typingHandlersRef = useRef<Set<(channelId: string, userId: string, displayName?: string) => void>>(new Set())
   const presenceHandlersRef = useRef<Set<(channelId: string, userId: string, status: string, displayName?: string) => void>>(new Set())
@@ -83,6 +86,14 @@ export function useWebSocket(): UseWebSocketReturn {
           const data: WSMessage = JSON.parse(event.data)
 
           switch (data.type) {
+            case 'connected': {
+              // Server sends actorId on successful handshake — capture it so we
+              // can filter our own typing events out of the indicator display.
+              if (data.actorId) {
+                setCurrentUserId(data.actorId as string)
+              }
+              break
+            }
             case 'message': {
               // Handle both direct message in payload and nested message object
               const apiMsg = data.payload?.message ?? data.message
@@ -191,6 +202,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
   return {
     connectionState,
+    currentUserId,
     connect,
     disconnect,
     subscribe,

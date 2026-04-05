@@ -7,9 +7,10 @@ interface ChannelHeaderProps {
   users: User[]
   presenceMap?: Record<string, string>
   onSearch?: () => void
+  onMenuClick?: () => void
 }
 
-export default function ChannelHeader({ channel, users, presenceMap = {}, onSearch }: ChannelHeaderProps) {
+export default function ChannelHeader({ channel, users, presenceMap = {}, onSearch, onMenuClick }: ChannelHeaderProps) {
   const userMap = new Map<string, User>()
   for (const u of users) userMap.set(u.id, u)
 
@@ -26,6 +27,38 @@ export default function ChannelHeader({ channel, users, presenceMap = {}, onSear
         minHeight: 52,
       }}
     >
+      {/* Hamburger — only visible on mobile via CSS */}
+      {onMenuClick && (
+        <button
+          className="mobile-header"
+          onClick={onMenuClick}
+          aria-label="Open sidebar"
+          style={{
+            display: 'none', /* overridden to flex by .mobile-header media query */
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 36,
+            height: 36,
+            borderRadius: 'var(--radius-md)',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            flexShrink: 0,
+            marginRight: 4,
+            padding: 0,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <rect y="3" width="18" height="2" rx="1" fill="currentColor"/>
+            <rect y="8" width="18" height="2" rx="1" fill="currentColor"/>
+            <rect y="13" width="18" height="2" rx="1" fill="currentColor"/>
+          </svg>
+        </button>
+      )}
+
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {typeIcon && (

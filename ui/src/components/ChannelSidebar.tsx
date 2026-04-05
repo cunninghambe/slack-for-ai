@@ -11,6 +11,7 @@ interface SidebarProps {
   onOpenDM?: () => void
   presenceMap?: Record<string, string>
   userNames?: Record<string, string>
+  className?: string
 }
 
 export default function ChannelSidebar({
@@ -22,6 +23,7 @@ export default function ChannelSidebar({
   onOpenDM,
   presenceMap = {},
   userNames = {},
+  className,
 }: SidebarProps) {
   const publicChannels = channels.filter((c) => c.type === 'public')
   const privateChannels = channels.filter((c) => c.type === 'private')
@@ -149,6 +151,7 @@ export default function ChannelSidebar({
 
   return (
     <div
+      className={className}
       style={{
         width: 260,
         minWidth: 260,

@@ -57,6 +57,7 @@ export default function SlackApp({
   const [showSearch, setShowSearch] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const { openThread, loading: threadLoading, open: openThreadFn, close: closeThreadFn, setOpenThread } = useThread()
 
   // Keyboard shortcut: Ctrl+K / Cmd+K opens search modal
@@ -186,14 +187,29 @@ export default function SlackApp({
     ? messages.find((m) => m.id === openThread.parentId)
     : null
 
+  const handleChannelSelect = useCallback((channelId: string) => {
+    onChannelSelect(channelId)
+    setSidebarOpen(false)
+  }, [onChannelSelect])
+
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
+      {/* Mobile sidebar overlay — only rendered when sidebar is open on mobile */}
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
       <ChannelSidebar
+        className={`sidebar${sidebarOpen ? ' open' : ''}`}
         channels={channels}
         users={[currentActor]}
         activeChannelId={activeChannelId}
-        onChannelSelect={onChannelSelect}
+        onChannelSelect={handleChannelSelect}
         onCreateChannel={() => setShowCreateChannel(true)}
         onOpenDM={() => setShowAgentPicker(true)}
         presenceMap={presenceMap}
@@ -204,7 +220,13 @@ export default function SlackApp({
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {activeChannel ? (
           <>
-            <ChannelHeader channel={activeChannel} users={[currentActor]} presenceMap={presenceMap} onSearch={() => setShowSearch(true)} />
+            <ChannelHeader
+              channel={activeChannel}
+              users={[currentActor]}
+              presenceMap={presenceMap}
+              onSearch={() => setShowSearch(true)}
+              onMenuClick={() => setSidebarOpen(true)}
+            />
 
             {/* Message list */}
             <div
@@ -283,16 +305,53 @@ export default function SlackApp({
             </div>
           </>
         ) : (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            Select a channel or create one to get started
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            {/* Mobile-only top bar so the hamburger is always reachable */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: 'var(--space-3) var(--space-4)',
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                minHeight: 52,
+              }}
+            >
+              <button
+                className="mobile-header"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="Open sidebar"
+                style={{
+                  display: 'none',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 'var(--radius-md)',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <rect y="3" width="18" height="2" rx="1" fill="currentColor"/>
+                  <rect y="8" width="18" height="2" rx="1" fill="currentColor"/>
+                  <rect y="13" width="18" height="2" rx="1" fill="currentColor"/>
+                </svg>
+              </button>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              Select a channel or create one to get started
+            </div>
           </div>
         )}
       </div>

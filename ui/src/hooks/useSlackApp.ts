@@ -37,7 +37,7 @@ export function useSlackApp() {
     setMessages,
   } = useMessages(activeChannelId)
 
-  const { connectionState, subscribe, sendTyping, onMessage, onTyping, onPresence } = useWebSocket()
+  const { connectionState, currentUserId, subscribe, sendTyping, onMessage, onTyping, onPresence } = useWebSocket()
 
   /* ── Typing indicators with display names ──────────────────────────── */
   // Stores { userId -> displayName } for the current channel
@@ -46,7 +46,10 @@ export function useSlackApp() {
 
   useEffect(() => {
     return onTyping((channelId: string, userId: string, displayName?: string) => {
-      if (userId === 'current-user') return
+      // Filter out the current user's own typing events (server broadcasts to all
+      // subscribers including the sender's own connection when multiple tabs are open,
+      // and we also want to avoid showing self-typing in the indicator).
+      if (currentUserId && userId === currentUserId) return
       const name = displayName || userId.slice(0, 8)
 
       setTypingUsers((prev) => ({
@@ -65,7 +68,7 @@ export function useSlackApp() {
         })
       }, 3000)
     })
-  }, [onTyping])
+  }, [onTyping, currentUserId])
 
   /* ── Presence map for online/offline status ────────────────────────── */
   const [userNames, setUserNames] = useState<Record<string, string>>({})

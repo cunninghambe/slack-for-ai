@@ -22,6 +22,7 @@ export default function ThreadView({
 }: ThreadViewProps) {
   return (
     <div
+      className="thread-panel"
       style={{
         width: 380,
         minWidth: 380,

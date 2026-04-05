@@ -196,11 +196,7 @@ input::placeholder, textarea::placeholder {
     z-index: 50;
   }
   .mobile-header {
-    display: flex;
-  }
-  button, [role="button"], .channel-item {
-    min-height: 44px;
-    min-width: 44px;
+    display: flex !important;
   }
 }
 
