@@ -9,7 +9,6 @@
  * board UI cannot authenticate with the token-required WebSocket server.
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Message } from '../types'
 import { getMessages as apiGetMessages } from '../api/client'
 import { useChannels } from './useChannels'
 import { useMessages } from './useMessages'
@@ -88,42 +87,34 @@ export function useSlackApp() {
     : []
 
   /* ── Real-time message delivery (polling fallback) ────────────────── */
-  // The WebSocket server requires a token query param that the board UI
-  // doesn't have. We poll the messages endpoint as a reliable fallback.
-  const knownMessageIdsRef = useRef(new Set<string>())
-
   useEffect(() => {
     if (!activeChannelId) return
 
-    // Build known message set from currently loaded messages
-    knownMessageIdsRef.current = new Set(activeMessages.map((m) => m.id))
-
     const pollForNewMessages = async () => {
       try {
-        const msgs = await apiGetMessages(activeChannelId)
-
-        for (const msg of msgs) {
-          if (!knownMessageIdsRef.current.has(msg.id)) {
-            setMessages((prev) => {
-              const channelMsgs = prev[activeChannelId] || []
-              if (channelMsgs.some((m) => m.id === msg.id)) return prev
-              // Keep sorted by sequence number
-              const next = [...channelMsgs, msg].sort(
-                (a, b) => ((a as any).sequenceNum ?? 0) - ((b as any).sequenceNum ?? 0)
-              )
-              return { ...prev, [activeChannelId]: next }
-            })
-            knownMessageIdsRef.current.add(msg.id)
-          }
-        }
+        const polled = await apiGetMessages(activeChannelId)
+        setMessages((prev) => {
+          const existing = prev[activeChannelId] || []
+          const existingIds = new Set(existing.map((m) => m.id))
+          const newMsgs = polled.filter((m) => !existingIds.has(m.id))
+          if (newMsgs.length === 0) return prev
+          const merged = [...existing, ...newMsgs].sort(
+            (a, b) => ((a as any).sequenceNum ?? 0) - ((b as any).sequenceNum ?? 0)
+          )
+          return { ...prev, [activeChannelId]: merged }
+        })
       } catch {
         // Silently ignore poll errors — will retry on next interval
       }
     }
 
-    pollForNewMessages()
+    // Delay first poll to let useMessages finish initial fetch
+    const initialDelay = setTimeout(pollForNewMessages, 1000)
     const interval = setInterval(pollForNewMessages, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
+    return () => {
+      clearTimeout(initialDelay)
+      clearInterval(interval)
+    }
   }, [activeChannelId, setMessages])
 
   /* ── WebSocket subscription for typing ────────────────────────────── */
