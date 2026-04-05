@@ -24,6 +24,7 @@ import { receiptsRouter } from "./routes/receipts.js";
 import channelMembershipRouter from "./routes/channel-membership.js";
 import agentsRouter from "./routes/agents.js";
 import searchRouter from "./routes/search.js";
+import loginRouter from "./routes/login.js";
 import { requestMetrics, errorTracker, rateLimiter } from "./middleware/monitoring.js";
 import { correlationId } from "./middleware/correlation.js";
 import { logger } from "./utils/logger.js";
@@ -58,6 +59,9 @@ app.use("/api/metrics", metricsRouter);
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "slack-for-ai", port: PORT });
 });
+
+// ─── Auth Routes (no auth required) ──────────────────────────
+app.use("/api/auth", loginRouter);
 
 // ─── REST Route Mounting ────────────────────────────────────
 app.use("/api/channels", channelsRouter);

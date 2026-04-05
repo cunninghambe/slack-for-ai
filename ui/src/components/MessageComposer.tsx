@@ -19,6 +19,7 @@ export default function MessageComposer({ channelName, placeholder, onSend, onTy
     setText('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+      textareaRef.current.focus()
     }
   }
 

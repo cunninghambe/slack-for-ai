@@ -1,7 +1,18 @@
 import type { Channel, Message, User, Reaction } from '../types';
 import type { ApiChannel, ApiMessage, ApiBackendAgent, ApiReaction } from './types';
 
-const FRONTEND_AGENT_ID = import.meta.env.VITE_AGENT_ID || '777465c9-8b3a-4388-ae65-22744b6c9daf';
+import { getToken } from './client';
+
+function getLoggedInUser(): { id: string; name: string } {
+  const token = getToken();
+  if (!token) return { id: 'unknown', name: 'Unknown' };
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return { id: payload.sub || 'unknown', name: payload.sub || 'Unknown' };
+  } catch {
+    return { id: 'unknown', name: 'Unknown' };
+  }
+}
 
 /** Map a backend agent record to UI User type */
 export function mapApiAgent(api: ApiBackendAgent): User {
@@ -47,9 +58,13 @@ export function mapApiMessage(
   api: ApiMessage,
   senderUser?: User | undefined,
 ): Message {
+  const senderId = api.senderAgentId || api.senderUserId || 'unknown';
+  const senderName = api.senderAgentId
+    ? (api as any).senderAgentName || 'Agent'
+    : api.senderUserId || 'Unknown';
   const sender: User = senderUser || {
-    id: api.senderAgentId || api.senderUserId || 'unknown',
-    name: api.senderAgentId ? 'Agent' : api.senderUserId ? 'User' : 'Unknown',
+    id: senderId,
+    name: senderName.charAt(0).toUpperCase() + senderName.slice(1),
     isAgent: !!api.senderAgentId,
     status: 'available',
   }
@@ -79,9 +94,14 @@ export function mapApiMessage(
 }
 
 /** The current user / actor for the frontend */
-export const currentActor: User = {
-  id: FRONTEND_AGENT_ID,
-  name: 'Frontend Engineer',
-  isAgent: true,
-  status: 'available',
-};
+export function getCurrentActor(): User {
+  const user = getLoggedInUser();
+  return {
+    id: user.id,
+    name: user.name.charAt(0).toUpperCase() + user.name.slice(1),
+    isAgent: false,
+    status: 'available',
+  };
+}
+
+export const currentActor: User = getCurrentActor();

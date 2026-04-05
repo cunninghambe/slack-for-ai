@@ -449,11 +449,11 @@ const databaseUrl =
   process.env.DATABASE_URL ??
   "postgresql://paperclip:***@localhost:5432/paperclip";
 
-export const pool = wrapPoolForSlowQueries(new Pool({
+export const pool = new Pool({
   connectionString: databaseUrl,
   ssl: false,
   max: 20,
   idleTimeoutMillis: 30000,
-}));
+});
 
 export const db = drizzle(pool, { schema }) as Database;

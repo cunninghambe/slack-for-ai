@@ -141,13 +141,10 @@ export default function SlackApp({
   // Send message
   const handleSend = useCallback(async (content: string) => {
     if (!activeChannelId) return
-    setSendingMessage(true)
     try {
       await onSendMessage(content)
     } catch (err) {
       console.error('Failed to send message:', err)
-    } finally {
-      setSendingMessage(false)
     }
   }, [activeChannelId, onSendMessage])
 

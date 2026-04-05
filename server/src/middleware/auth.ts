@@ -72,7 +72,6 @@ export async function authenticate(
         companyId: string;
         kind?: string;
       };
-      
       // Validate the user exists
       const user = await db
         .select({

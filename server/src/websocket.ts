@@ -5,9 +5,12 @@
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import { Server } from "http";
 import { createHash } from "crypto";
-import { db, agentApiKeys, agents as agentsTable, channels, channelMemberships } from "./db.js";
+import { db, agentApiKeys, agents as agentsTable, authUsers, channels, channelMemberships } from "./db.js";
 import { eq, and, isNull } from "drizzle-orm";
+import jwt from "jsonwebtoken";
 import type { AuthActor } from "./middleware/auth.js";
+
+const JWT_SECRET = process.env.JWT_SECRET || "slack-for-ai-dev-secret";
 
 interface WSClient {
   ws: WSWebSocket;
@@ -24,8 +27,36 @@ const channelSubscribers = new Map<string, Set<WSWebSocket>>();
 
 /**
  * Authenticate a WebSocket connection using a query parameter token.
+ * Supports both JWT tokens (user auth) and agent API keys.
  */
 async function authenticateWS(token: string): Promise<AuthActor | null> {
+  // Try JWT first
+  if (token.includes(".")) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as {
+        sub: string;
+        companyId: string;
+        kind?: string;
+      };
+      const user = await db
+        .select({ id: authUsers.id, name: authUsers.name })
+        .from(authUsers)
+        .where(eq(authUsers.id, decoded.sub))
+        .limit(1);
+      if (user.length > 0) {
+        return {
+          kind: "user",
+          id: decoded.sub,
+          companyId: decoded.companyId,
+          keyName: user[0].name ?? decoded.sub,
+        };
+      }
+    } catch {
+      // Not a valid JWT, fall through to agent key
+    }
+  }
+
+  // Agent API key auth
   const keyDigest = createHash("sha256").update(token).digest("hex");
 
   const keyRecord = await db

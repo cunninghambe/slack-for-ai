@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { db, channels, messages, channelMemberships, messageReactions, NewMessage, NewReaction } from "../db.js";
-import { eq, and, isNull, desc, sql, type SQL } from "drizzle-orm";
+import { eq, and, isNull, desc, sql, inArray, type SQL } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
 import { broadcastToChannel } from "../websocket.js";
 import { logActivity, getNextSequenceNum, paramStr, asyncHandler } from "../utils/helpers.js";
@@ -124,7 +124,7 @@ router.get(
     const messageIds = messageList.map((m) => m.id);
     let reactions: typeof messageReactions.$inferSelect[] = [];
     if (messageIds.length > 0) {
-      reactions = await db.select().from(messageReactions).where(sql`message_reactions.message_id IN (${sql.join(messageIds.map((v) => sql.raw(`'${v}'`)), sql`, `)} )`);
+      reactions = await db.select().from(messageReactions).where(inArray(messageReactions.messageId, messageIds));
     }
 
     // Group reactions by messageId and emoji

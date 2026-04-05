@@ -2,11 +2,17 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import type { Message, Channel } from '../types'
 import { mapApiMessage } from '../api/mappers'
 import type { ApiMessage } from '../api/types'
+import { getToken } from '../api/client'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
-const WS_URL = API_BASE
-  ? API_BASE.replace(/^http/, 'ws').replace(/^https/, 'wss') + '/ws'
-  : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+
+function getWsUrl(): string {
+  const base = API_BASE
+    ? API_BASE.replace(/^http/, 'ws').replace(/^https/, 'wss') + '/ws'
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+  const token = getToken()
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base
+}
 const POLL_INTERVAL_MS = 3000
 
 export type WSConnectionState = 'disconnected' | 'connecting' | 'connected'
@@ -51,7 +57,7 @@ export function useWebSocket(): UseWebSocketReturn {
     setConnectionState('connecting')
 
     try {
-      const ws = new WebSocket(WS_URL)
+      const ws = new WebSocket(getWsUrl())
       wsRef.current = ws
 
       ws.onopen = () => {

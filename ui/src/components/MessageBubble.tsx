@@ -157,17 +157,17 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
         )}
 
         {/* Reactions */}
-        {(message.reactions.length > 0 || onReaction) && (
-          <div style={{ position: 'relative', display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 'var(--space-2)', alignItems: 'center' }}>
+        {message.reactions.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 'var(--space-2)', alignItems: 'center' }}>
             {message.reactions.map((r, idx) => (
               <button
                 key={idx}
                 role="button"
                 aria-label={`${r.count} ${r.emoji} reactions`}
                 style={{
-                  background: userReacted(r) ? 'rgba(255,255,255,0.12)' : 'var(--bg-elevated)',
-                  border: userReacted(r) ? '1px solid var(--accent-primary, #4a9eff)' : '1px solid rgba(255,255,255,0.08)',
-                  borderRadius: 'var(--radius-full)',
+                  background: userReacted(r) ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+                  border: userReacted(r) ? '1px solid var(--accent, #4a9eff)' : '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 12,
                   padding: '2px 8px',
                   fontSize: 12,
                   display: 'inline-flex',
@@ -176,37 +176,19 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
                   cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = userReacted(r) ? 'var(--accent-primary, #4a9eff)' : 'rgba(255,255,255,0.08)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = userReacted(r) ? 'var(--accent, #4a9eff)' : 'rgba(255,255,255,0.08)')}
                 onClick={() => handleReactionClick(r.emoji)}
               >
                 <span>{r.emoji}</span>
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{r.count}</span>
               </button>
             ))}
-            {onReaction && (
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                {showPicker && (
-                  <EmojiPicker onSelect={handleReactionSelect} onClose={() => setShowPicker(false)} />
-                )}
-                <button
-                  style={{
-                    background: 'transparent',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 'var(--radius-full)',
-                    padding: '2px 6px',
-                    fontSize: 14,
-                    cursor: 'pointer',
-                    opacity: showPicker ? 1 : 0.6,
-                  }}
-                  onClick={() => setShowPicker((prev) => !prev)}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
-                  title="Add reaction"
-                >
-                  +
-                </button>
-              </div>
-            )}
+          </div>
+        )}
+        {/* Emoji picker (shown via toolbar) */}
+        {showPicker && (
+          <div style={{ position: 'relative' }}>
+            <EmojiPicker onSelect={handleReactionSelect} onClose={() => setShowPicker(false)} />
           </div>
         )}
         {/* Thread link */}

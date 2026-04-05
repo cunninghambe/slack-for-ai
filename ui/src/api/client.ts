@@ -11,9 +11,40 @@ import { mapApiChannel, mapApiMessage } from './mappers';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
+export function getToken(): string | null {
+  return localStorage.getItem('nexus-token');
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem('nexus-token', token);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem('nexus-token');
+}
+
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
   return headers;
+}
+
+export async function login(username: string): Promise<{ token: string; user: { id: string; name: string } }> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'Login failed' }));
+    throw new Error(body.error || 'Login failed');
+  }
+  const data = await res.json();
+  setToken(data.token);
+  return data;
 }
 
 export async function getChannels(): Promise<Channel[]> {
