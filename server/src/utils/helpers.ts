@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import { db, activityLog, messages, type NewActivityLog } from "../db.js";
+import { db, activityLog, messages } from "../db.js";
 import { eq, and, isNull, max } from "drizzle-orm";
+
+export type ActivityInsert = typeof activityLog.$inferInsert;
 
 export function paramStr(req: Request, key: string): string {
   const val = req.params[key];
@@ -23,15 +25,15 @@ export async function logActivity(opts: {
   entityId: string;
   details?: Record<string, unknown>;
 }): Promise<void> {
-  const data: NewActivityLog = {
+  const data: ActivityInsert = {
     companyId: opts.companyId,
     actorType: opts.actor?.kind ?? "system",
     actorId: opts.actor?.id ?? null,
     action: opts.action,
     entityType: opts.entityType,
     entityId: opts.entityId,
-    details: opts.details ?? {},
-  };
+    details: opts.details ?? null,
+  } as ActivityInsert;
   await db.insert(activityLog).values(data);
 }
 

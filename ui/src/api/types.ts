@@ -10,7 +10,7 @@ export interface ApiChannel {
   archived: boolean;
   createdAt: string;
   updatedAt: string;
-  memberships?: { role: string; joinedAt: string; leftAt: string | null }[];
+  memberships?: { role: string; joinedAt: string; leftAt: string | null; agentId: string | null; userId: string | null }[];
 }
 
 export interface ApiMessage {

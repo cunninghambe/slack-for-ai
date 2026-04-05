@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { db, channels, messages, channelMemberships, messageReactions, type NewMessage } from "../db.js";
-import { eq, and, isNull, desc, sql, type SQL, inArray } from "drizzle-orm";
+import { db, channels, messages, channelMemberships, messageReactions, NewMessage, NewReaction } from "../db.js";
+import { eq, and, isNull, desc, sql, type SQL } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
 import { broadcastToChannel } from "../websocket.js";
 import { logActivity, getNextSequenceNum, paramStr, asyncHandler } from "../utils/helpers.js";
@@ -79,7 +79,7 @@ router.get(
     const before = req.query.before as string | undefined;
     const parentId = req.query.parentId as string | undefined;
 
-    const whereClauses: (SQL | undefined)[] = [
+    const whereClauses: SQL<unknown>[] = [
       eq(messages.channelId, channelId),
       isNull(messages.deletedAt),
     ];
@@ -124,7 +124,7 @@ router.get(
     const messageIds = messageList.map((m) => m.id);
     let reactions: typeof messageReactions.$inferSelect[] = [];
     if (messageIds.length > 0) {
-      reactions = await db.select().from(messageReactions).where(inArray(messageReactions.messageId, messageIds));
+      reactions = await db.select().from(messageReactions).where(sql`message_reactions.message_id IN (${sql.join(messageIds.map((v) => sql.raw(`'${v}'`)), sql`, `)} )`);
     }
 
     // Group reactions by messageId and emoji
@@ -241,19 +241,20 @@ router.post(
 
     const sequenceNum = await getNextSequenceNum(channelId, parentId ?? null);
 
-    const insertData: NewMessage = {
+    const messageData: NewMessage = {
       channelId,
       parentId: parentId ?? null,
       senderAgentId: actor.kind === "agent" ? actor.id : null,
       senderUserId: actor.kind === "user" ? actor.id : null,
       content: content ?? null,
       messageType,
-      structuredPayload: (structuredPayload as Record<string, unknown>) ?? null,
+      structuredPayload: structuredPayload ?? null,
       sequenceNum,
-    };
+    } as NewMessage;
+
     const inserted = await db
       .insert(messages)
-      .values(insertData)
+      .values(messageData)
       .returning();
 
     const newMessage = inserted[0];
@@ -263,8 +264,8 @@ router.post(
       await db
         .update(messages)
         .set({
-          replyCount: sql`${messages.replyCount} + 1` as unknown as number,
-        })
+          replyCount: sql`${messages.replyCount} + 1`,
+        } as Partial<typeof messages.$inferInsert>)
         .where(eq(messages.id, parentId));
     }
 
@@ -353,8 +354,7 @@ router.patch(
         content: validation.data.content,
         edited: true,
         editedAt: new Date(),
-        updatedAt: new Date(),
-      })
+      } as Partial<typeof messages.$inferInsert>)
       .where(eq(messages.id, id))
       .returning();
 
@@ -408,8 +408,7 @@ router.delete(
         deletedAt: new Date(),
         deletedByAgentId: actor.kind === "agent" ? actor.id : null,
         deletedByUserId: actor.kind === "user" ? actor.id : null,
-        updatedAt: new Date(),
-      })
+      } as Partial<typeof messages.$inferInsert>)
       .where(eq(messages.id, id));
 
     await logActivity({

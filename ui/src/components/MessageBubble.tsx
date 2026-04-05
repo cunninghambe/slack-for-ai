@@ -4,9 +4,10 @@ import EmojiPicker from './EmojiPicker'
 import ToolCallBlock from './ToolCallBlock'
 import MessageToolbar from './MessageToolbar'
 import { Message } from '../types'
-import { formatMessageTime } from '../utils'
+import { formatTimeAgo, formatTimestamp } from '../utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import CodeBlock from './CodeBlock'
 
 interface MessageBubbleProps {
   message: Message
@@ -55,7 +56,7 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
   return (
     <article
       role="article"
-      aria-label={`Message from ${message.sender.name} at ${formatMessageTime(message.timestamp)}: ${message.content?.substring(0, 80) ?? 'No text content'}`}
+      aria-label={`Message from ${message.sender.name} at ${formatTimestamp(message.timestamp)}: ${message.content?.substring(0, 80) ?? 'No text content'}`}
       data-message-id={message.id}
       style={{
         display: 'flex',
@@ -87,8 +88,8 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
               {message.sender.name}
             </span>
-            <time style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-              {formatMessageTime(message.timestamp)}
+            <time style={{ fontSize: 12, color: 'var(--text-tertiary)' }} title={formatTimestamp(message.timestamp)}>
+              {formatTimeAgo(message.timestamp)}
             </time>
           </div>
         )}
@@ -135,7 +136,21 @@ export default function MessageBubble({ message, groupedWithPrevious, onThreadCl
         {/* Text content - Markdown */}
         {message.content && (
           <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text-primary)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code({ inline, className, children, ...props }) {
+                const match = /language-(\w+)/.exec(className || '')
+                if (!inline && match) {
+                  return <CodeBlock language={match[1]}>{String(children).replace(/\n$/, '')}</CodeBlock>
+                }
+                return <code className={className} {...props}>{children}</code>
+              },
+              pre({ children }) {
+                return <>{children}</>
+              },
+            }}
+          >
               {message.content}
             </ReactMarkdown>
           </div>

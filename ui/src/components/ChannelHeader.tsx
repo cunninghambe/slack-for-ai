@@ -5,9 +5,11 @@ import StatusDot from './StatusDot'
 interface ChannelHeaderProps {
   channel: Channel
   users: User[]
+  presenceMap?: Record<string, string>
+  onSearch?: () => void
 }
 
-export default function ChannelHeader({ channel, users }: ChannelHeaderProps) {
+export default function ChannelHeader({ channel, users, presenceMap = {}, onSearch }: ChannelHeaderProps) {
   const userMap = new Map<string, User>()
   for (const u of users) userMap.set(u.id, u)
 
@@ -44,6 +46,34 @@ export default function ChannelHeader({ channel, users }: ChannelHeaderProps) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {onSearch && (
+          <button
+            onClick={onSearch}
+            title="Search messages (Ctrl+K)"
+            style={{
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 'var(--radius-md, 8px)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: '6px 10px',
+              fontSize: 14,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontFamily: 'inherit',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.1)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+            }}
+          >
+            &#x1f50d;
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Ctrl+K</span>
+          </button>
+        )}
         <StatusDot
           status="available"
           label={`${channel.memberCount} members`}
@@ -53,9 +83,10 @@ export default function ChannelHeader({ channel, users }: ChannelHeaderProps) {
           {channel.members.slice(0, 3).map((memberId) => {
             const user = userMap.get(memberId)
             if (!user) return null
+            const liveStatus = presenceMap[memberId] || user.status
             return (
               <div key={memberId} style={{ marginLeft: -4 }}>
-                <Avatar user={user} size="sm" showStatus />
+                <Avatar user={{ ...user, status: liveStatus }} size="sm" showStatus />
               </div>
             )
           })}

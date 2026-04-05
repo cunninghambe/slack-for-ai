@@ -12,6 +12,7 @@ import type { AuthActor } from "./middleware/auth.js";
 interface WSClient {
   ws: WSWebSocket;
   actor: AuthActor;
+  displayName: string;
   subscribedChannels: Set<string>;
 }
 
@@ -110,6 +111,7 @@ export function attachWebSocket(server: Server): void {
     const client: WSClient = {
       ws,
       actor,
+      displayName: actor.keyName || actor.id.slice(0, 8),
       subscribedChannels: new Set(),
     };
 
@@ -181,6 +183,20 @@ export function attachWebSocket(server: Server): void {
             type: "subscribed",
             channelId,
           });
+
+          // Broadcast presence to other subscribers
+          const presencePayload = JSON.stringify({
+            type: "presence",
+            channelId,
+            userId: actor.id,
+            displayName: client.displayName,
+            status: "available",
+          });
+          channelSubscribers.get(channelId)?.forEach((other) => {
+            if (other !== ws && other.readyState === WSWebSocket.OPEN) {
+              other.send(presencePayload);
+            }
+          });
           break;
         }
 
@@ -198,11 +214,45 @@ export function attachWebSocket(server: Server): void {
             type: "unsubscribed",
             channelId,
           });
+
+          // Broadcast offline presence to remaining subscribers
+          const unsubPayload = JSON.stringify({
+            type: "presence",
+            channelId,
+            userId: actor.id,
+            displayName: client.displayName,
+            status: "offline",
+          });
+          channelSubscribers.get(channelId)?.forEach((other) => {
+            if (other.readyState === WSWebSocket.OPEN) {
+              other.send(unsubPayload);
+            }
+          });
           break;
         }
 
         case "ping": {
           sendJSON(ws, { type: "pong" });
+          break;
+        }
+
+        case "typing": {
+          const channelId = data.channelId as string;
+          // Broadcast typing to all OTHER subscribers of this channel
+          const subs = channelSubscribers.get(channelId);
+          if (subs) {
+            const payload = JSON.stringify({
+              type: "typing",
+              channelId,
+              userId: actor.id,
+              displayName: client.displayName,
+            });
+            subs.forEach((other) => {
+              if (other !== ws && other.readyState === WSWebSocket.OPEN) {
+                other.send(payload);
+              }
+            });
+          }
           break;
         }
 
@@ -215,6 +265,26 @@ export function attachWebSocket(server: Server): void {
     });
 
     ws.on("close", () => {
+      // Broadcast offline presence to all channels client was subscribed to
+      const channels = Array.from(client.subscribedChannels);
+      for (let i = 0; i < channels.length; i++) {
+        const channelId = channels[i];
+        const presencePayload = JSON.stringify({
+          type: "presence",
+          channelId,
+          userId: actor.id,
+          displayName: client.displayName,
+          status: "offline",
+        });
+        const subs = channelSubscribers.get(channelId);
+        if (subs) {
+          subs.forEach((other) => {
+            if (other.readyState === WSWebSocket.OPEN) {
+              other.send(presencePayload);
+            }
+          });
+        }
+      }
       clients.delete(ws);
       // Clean up subscriptions
       channelSubscribers.forEach((subs, channelId) => {

@@ -24,7 +24,6 @@ import {
   channels,
   channelMemberships,
   agents,
-  type NewChannelMembership,
 } from "../db.js";
 import { eq, and, isNull, asc } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
@@ -183,15 +182,14 @@ router.post("/channels/:channelId", async (req: Request, res: Response) => {
     if (existing.length > 0 && existing[0].leftAt !== null) {
       await db
         .update(channelMemberships)
-        .set({ leftAt: null, role })
+        .set({ leftAt: null, role } as Partial<typeof channelMemberships.$inferInsert>)
         .where(eq(channelMemberships.id, existing[0].id));
     } else {
-      const memberData: NewChannelMembership = {
+      await db.insert(channelMemberships).values({
         channelId,
         agentId,
         role,
-      };
-      await db.insert(channelMemberships).values(memberData);
+      } as typeof channelMemberships.$inferInsert);
     }
 
     await logActivity({
@@ -233,7 +231,7 @@ router.delete("/channels/:channelId/agents/:agentId", async (req: Request, res: 
 
     await db
       .update(channelMemberships)
-      .set({ leftAt: new Date() })
+      .set({ leftAt: new Date() } as Partial<typeof channelMemberships.$inferInsert>)
       .where(eq(channelMemberships.id, result[0].id));
 
     await logActivity({

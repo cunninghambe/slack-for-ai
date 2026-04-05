@@ -20,7 +20,10 @@ import healthRouter from "./routes/health.js";
 import metricsRouter from "./routes/metrics.js";
 import mcpRouter from "./routes/mcp.js";
 import uploadsRouter from "./routes/uploads.js";
+import { receiptsRouter } from "./routes/receipts.js";
 import channelMembershipRouter from "./routes/channel-membership.js";
+import agentsRouter from "./routes/agents.js";
+import searchRouter from "./routes/search.js";
 import { requestMetrics, errorTracker, rateLimiter } from "./middleware/monitoring.js";
 import { correlationId } from "./middleware/correlation.js";
 import { logger } from "./utils/logger.js";
@@ -59,6 +62,9 @@ app.get("/health", (_req, res) => {
 // ─── REST Route Mounting ────────────────────────────────────
 app.use("/api/channels", channelsRouter);
 app.use("/api/channels", messagesRouter);
+app.use("/api", searchRouter);
+app.use("/api/channels", receiptsRouter);
+app.use("/api/agents", agentsRouter);
 app.use("/api/messages", reactionsRouter);
 
 // ─── Membership Routes ──────────────────────────────

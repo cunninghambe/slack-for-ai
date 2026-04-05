@@ -1,5 +1,6 @@
 import { Channel, User } from '../types'
 import StatusDot from './StatusDot'
+import Avatar from './Avatar'
 
 interface SidebarProps {
   channels: Channel[]
@@ -7,6 +8,9 @@ interface SidebarProps {
   activeChannelId: string | null
   onChannelSelect: (channelId: string) => void
   onCreateChannel: () => void
+  onOpenDM?: () => void
+  presenceMap?: Record<string, string>
+  userNames?: Record<string, string>
 }
 
 export default function ChannelSidebar({
@@ -15,6 +19,9 @@ export default function ChannelSidebar({
   activeChannelId,
   onChannelSelect,
   onCreateChannel,
+  onOpenDM,
+  presenceMap = {},
+  userNames = {},
 }: SidebarProps) {
   const publicChannels = channels.filter((c) => c.type === 'public')
   const privateChannels = channels.filter((c) => c.type === 'private')
@@ -27,7 +34,20 @@ export default function ChannelSidebar({
   function getDMUser(channel: Channel): User | undefined {
     // Find the other member besides self
     const otherId = channel.members.find((m) => m !== 'current-user')
-    return otherId ? userMap.get(otherId) : undefined
+    if (!otherId) return undefined
+    const baseUser = userMap.get(otherId)
+    if (!baseUser) {
+      // Fallback: create from presence data
+      const name = userNames[otherId] || otherId.slice(0, 8)
+      const status = presenceMap[otherId] || 'offline'
+      return { id: otherId, name, isAgent: true, status }
+    }
+    // Override status with presence if available
+    const liveStatus = presenceMap[otherId]
+    if (liveStatus && liveStatus !== baseUser.status) {
+      return { ...baseUser, status: liveStatus }
+    }
+    return baseUser
   }
 
   const typeIcon = (channel: Channel) => {
@@ -82,7 +102,7 @@ export default function ChannelSidebar({
           {isDM ? '' : typeIcon(channel)}
         </span>
         {dmUser && (
-          <StatusDot status={dmUser.status} />
+          <Avatar user={dmUser} size="sm" showStatus />
         )}
         <span style={nameStyle}>{channel.name}</span>
         {channel.unreadCount > 0 && (
@@ -191,12 +211,34 @@ export default function ChannelSidebar({
             fontWeight: 500,
             fontSize: 13,
             fontFamily: 'var(--font-sans)',
+            marginBottom: 'var(--space-2)',
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
           onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           + New Channel
         </button>
+        {onOpenDM && (
+          <button
+            onClick={onOpenDM}
+            style={{
+              width: '100%',
+              padding: 'var(--space-2) var(--space-3)',
+              background: 'transparent',
+              color: 'var(--accent-primary)',
+              border: '1px dashed rgba(99,102,241,0.3)',
+              borderRadius: 'var(--radius-md)',
+              cursor: 'pointer',
+              fontWeight: 500,
+              fontSize: 13,
+              fontFamily: 'var(--font-sans)',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            + New DM
+          </button>
+        )}
       </div>
     </div>
   )

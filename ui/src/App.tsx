@@ -12,6 +12,8 @@ function App() {
     error,
     activeMessages,
     typingUsers,
+    userNames,
+    presenceMap,
     connectionState,
     handleChannelSelect,
     createChannel,
@@ -54,6 +56,8 @@ function App() {
       activeChannel={activeChannel}
       loadingMessages={loadingMessages}
       typingUsers={typingUsers}
+      userNames={userNames}
+      presenceMap={presenceMap}
       connectionState={connectionState}
       onChannelSelect={handleChannelSelect}
       onCreateChannel={createChannel}

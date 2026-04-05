@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { db, messages, messageReactions, type NewReaction } from "../db.js";
+import { db, messages, messageReactions } from "../db.js";
 import { eq, and, isNull, sql, count } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
 import { logActivity, paramStr, asyncHandler } from "../utils/helpers.js";
@@ -65,12 +65,12 @@ router.post(
       return;
     }
 
-    const reactionData: NewReaction = {
+    const reactionData: typeof messageReactions.$inferInsert = {
       messageId,
       agentId: actor.kind === "agent" ? actor.id : null,
       userId: actor.kind === "user" ? actor.id : null,
       emoji,
-    };
+    } as typeof messageReactions.$inferInsert;
     const inserted = await db
       .insert(messageReactions)
       .values(reactionData)
@@ -173,11 +173,11 @@ router.get(
       `
     );
 
-    const reactions = results.rows.map((row: Record<string, unknown>) => ({
-      emoji: row.emoji as string,
+    const reactions = results.rows.map((row: any) => ({
+      emoji: row.emoji,
       count: Number(row.count),
-      agentIds: (row.agent_ids as string[] | null)?.filter((x) => x !== null) ?? [],
-      userIds: (row.user_ids as string[] | null)?.filter((x) => x !== null) ?? [],
+      agentIds: row.agent_ids?.filter((x: any) => x !== null) ?? [],
+      userIds: row.user_ids?.filter((x: any) => x !== null) ?? [],
     }));
 
     res.json(reactions);

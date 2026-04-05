@@ -1,14 +1,17 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Channel, Message } from '../types'
+import SearchModal from './SearchModal'
 import ChannelSidebar from './ChannelSidebar'
 import ChannelHeader from './ChannelHeader'
 import MessageBubble from './MessageBubble'
 import MessageComposer from './MessageComposer'
 import ThreadView from './ThreadView'
 import CreateChannelModal from './CreateChannelModal'
+import DateSeparator from './DateSeparator'
+import AgentPicker from './AgentPicker'
 import TypingIndicator from './TypingIndicator'
 import { useThread } from '../hooks/useMessages'
-import { sendMessage as apiSendMessage } from '../api/client'
+import { sendMessage as apiSendMessage, createDM as apiCreateDM } from '../api/client'
 import { currentActor } from '../api/mappers'
 import type { WSConnectionState } from '../hooks/useWebSocket'
 
@@ -19,6 +22,8 @@ interface SlackAppProps {
   activeChannel: Channel | null
   loadingMessages: boolean
   typingUsers: string[]
+  userNames: Record<string, string>
+  presenceMap: Record<string, string>
   connectionState: WSConnectionState
   onChannelSelect: (channelId: string) => void
   onCreateChannel: (name: string, description: string, type: 'public' | 'private') => Promise<Channel>
@@ -26,6 +31,7 @@ interface SlackAppProps {
   onReaction: (messageId: string, emoji: string) => void
   onUserTyping?: () => void
   setMessages: React.Dispatch<React.SetStateAction<Record<string, Message[]>>>
+  setChannels?: React.Dispatch<React.SetStateAction<Channel[]>>
 }
 
 export default function SlackApp({
@@ -35,6 +41,8 @@ export default function SlackApp({
   activeChannel,
   loadingMessages,
   typingUsers,
+  userNames,
+  presenceMap,
   connectionState,
   onChannelSelect,
   onCreateChannel,
@@ -42,17 +50,55 @@ export default function SlackApp({
   onReaction,
   onUserTyping,
   setMessages,
+  setChannels,
 }: SlackAppProps) {
   const [showCreateChannel, setShowCreateChannel] = useState(false)
+  const [showAgentPicker, setShowAgentPicker] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
   const [sendingMessage, setSendingMessage] = useState(false)
   const { openThread, loading: threadLoading, open: openThreadFn, close: closeThreadFn, setOpenThread } = useThread()
 
+  // Keyboard shortcut: Ctrl+K / Cmd+K opens search modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowSearch(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   // Group messages: collapse consecutive messages from same sender
+  // Also insert date separators when messages span different days
   const groupedMessages = messages.map((msg, i) => {
     const prev = messages[i - 1]
     const isGrouped = prev && prev.sender.id === msg.sender.id
-    return { msg, grouped: !!isGrouped }
+    // Check if we need a date separator
+    let dateSeparator = ''
+    if (!isGrouped && prev) {
+      const prevDay = new Date(prev.timestamp).toDateString()
+      const currDay = new Date(msg.timestamp).toDateString()
+      const now = new Date()
+      const yesterday = new Date(now)
+      yesterday.setDate(yesterday.getDate() - 1)
+
+      if (currDay === now.toDateString()) {
+        dateSeparator = 'Today'
+      } else if (currDay === yesterday.toDateString()) {
+        dateSeparator = 'Yesterday'
+      } else {
+        dateSeparator = new Date(msg.timestamp).toLocaleDateString(undefined, {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      }
+    }
+
+    return { msg, grouped: !!isGrouped, dateSeparator }
   })
 
   // Thread handling
@@ -118,6 +164,18 @@ export default function SlackApp({
     }
   }, [onCreateChannel])
 
+  // Start a DM with an agent
+  const handleSelectAgent = useCallback(async (targetAgentId: string) => {
+    setShowAgentPicker(false)
+    try {
+      const dmChannel = await apiCreateDM(targetAgentId)
+      setChannels?.((prev) => [...prev, dmChannel])
+      onChannelSelect(dmChannel.id)
+    } catch (err) {
+      console.error('Failed to create/find DM:', err)
+    }
+  }, [onChannelSelect, setChannels])
+
   // Reaction
   const handleReactionClick = useCallback(async (messageId: string, emoji: string) => {
     onReaction(messageId, emoji)
@@ -140,13 +198,16 @@ export default function SlackApp({
         activeChannelId={activeChannelId}
         onChannelSelect={onChannelSelect}
         onCreateChannel={() => setShowCreateChannel(true)}
+        onOpenDM={() => setShowAgentPicker(true)}
+        presenceMap={presenceMap}
+        userNames={userNames}
       />
 
       {/* Main content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {activeChannel ? (
           <>
-            <ChannelHeader channel={activeChannel} users={[currentActor]} />
+            <ChannelHeader channel={activeChannel} users={[currentActor]} presenceMap={presenceMap} onSearch={() => setShowSearch(true)} />
 
             {/* Message list */}
             <div
@@ -183,15 +244,17 @@ export default function SlackApp({
                 </div>
               ) : (
                 <>
-                  {groupedMessages.map(({ msg: m, grouped: g }) => (
-                    <MessageBubble
-                      key={m.id}
-                      message={m}
-                      groupedWithPrevious={g}
-                      onThreadClick={() => handleThreadClick(m.id)}
-                      onReaction={handleReactionClick}
-                      onReplyClick={() => handleThreadClick(m.id)}
-                    />
+                  {groupedMessages.map(({ msg: m, grouped: g, dateSeparator: ds }, idx) => (
+                    <div key={m.id}>
+                      {ds && <DateSeparator label={ds} />}
+                      <MessageBubble
+                        message={m}
+                        groupedWithPrevious={g}
+                        onThreadClick={() => handleThreadClick(m.id)}
+                        onReaction={handleReactionClick}
+                        onReplyClick={() => handleThreadClick(m.id)}
+                      />
+                    </div>
                   ))}
                 </>
               )}
@@ -255,6 +318,27 @@ export default function SlackApp({
           onClose={() => setShowCreateChannel(false)}
           onSubmit={handleCreateChannel}
           loading={creatingChannel}
+        />
+      )}
+
+      {/* Agent picker modal for DM */}
+      {showAgentPicker && (
+        <AgentPicker
+          currentAgentId={currentActor.id}
+          onSelect={handleSelectAgent}
+          onClose={() => setShowAgentPicker(false)}
+        />
+      )}
+
+      {/* Search modal */}
+      {showSearch && (
+        <SearchModal
+          onClose={() => setShowSearch(false)}
+          onSelectChannel={(channelId) => {
+            onChannelSelect(channelId)
+            setShowSearch(false)
+          }}
+          activeChannelId={activeChannelId}
         />
       )}
     </div>

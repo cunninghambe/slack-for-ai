@@ -37,44 +37,51 @@ export function useSlackApp() {
     setMessages,
   } = useMessages(activeChannelId)
 
-  const { connectionState, subscribe, sendTyping, onMessage, onTyping } = useWebSocket()
+  const { connectionState, subscribe, sendTyping, onMessage, onTyping, onPresence } = useWebSocket()
 
-  /* ── Typing indicators ────────────────────────────────────────────── */
-  const [typingUsers, setTypingUsers] = useState<Record<string, Set<string>>>({})
+  /* ── Typing indicators with display names ──────────────────────────── */
+  // Stores { userId -> displayName } for the current channel
+  const [typingUsers, setTypingUsers] = useState<Record<string, { displayName: string }>>({})
   const typingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   useEffect(() => {
-    return onTyping((channelId: string, userId: string) => {
+    return onTyping((channelId: string, userId: string, displayName?: string) => {
       if (userId === 'current-user') return
+      const name = displayName || userId.slice(0, 8)
 
-      setTypingUsers((prev) => {
-        const channelTyping = prev[channelId] || new Set()
-        channelTyping.add(userId)
-        return { ...prev, [channelId]: new Set(channelTyping) }
-      })
+      setTypingUsers((prev) => ({
+        ...prev,
+        [userId]: { displayName: name },
+      }))
 
       const key = `${channelId}:${userId}`
       if (typingTimersRef.current[key]) clearTimeout(typingTimersRef.current[key])
 
       typingTimersRef.current[key] = setTimeout(() => {
         setTypingUsers((prev) => {
-          const ct = prev[channelId]
-          if (!ct) return prev
-          const next = new Set(ct)
-          next.delete(userId)
-          if (next.size === 0) {
-            const updated = { ...prev }
-            delete updated[channelId]
-            return updated
-          }
-          return { ...prev, [channelId]: next }
+          const updated = { ...prev }
+          delete updated[userId]
+          return updated
         })
       }, 3000)
     })
   }, [onTyping])
 
+  /* ── Presence map for online/offline status ────────────────────────── */
+  const [userNames, setUserNames] = useState<Record<string, string>>({})
+  const [presenceMap, setPresenceMap] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    return onPresence((channelId: string, userId: string, status: string, displayName?: string) => {
+      if (displayName) {
+        setUserNames((prev) => ({ ...prev, [userId]: displayName }))
+      }
+      setPresenceMap((prev) => ({ ...prev, [userId]: status }))
+    })
+  }, [onPresence])
+
   const currentTyping = activeChannelId
-    ? Array.from(typingUsers[activeChannelId] || new Set()).slice(0, 3)
+    ? Object.values(typingUsers).map((u) => u.displayName)
     : []
 
   /* ── Real-time message delivery (polling fallback) ────────────────── */
@@ -166,6 +173,8 @@ export function useSlackApp() {
     error,
     activeMessages,
     typingUsers: currentTyping,
+    userNames,
+    presenceMap,
     connectionState,
     handleChannelSelect,
     createChannel,

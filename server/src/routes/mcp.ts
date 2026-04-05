@@ -19,11 +19,8 @@ import {
   messages,
   channelMemberships,
   messageReactions,
-  type NewMessage,
-  type NewReaction,
-  type NewChannelMembership,
 } from "../db.js";
-import { eq, and, isNull, desc, asc, sql } from "drizzle-orm";
+import { eq, and, isNull, desc, asc, sql, type SQL } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
 import { logActivity, paramStr, asyncHandler } from "../utils/helpers.js";
 import { broadcastToChannel } from "../websocket.js";
@@ -47,14 +44,14 @@ async function handleListChannels(
   actor: { kind: string; id: string },
   params: Record<string, unknown>
 ) {
-  const whereClauses = [
+  const whereClauses: SQL<unknown>[] = [
     eq(channels.companyId, COMPANY_ID),
     isNull(channels.deletedAt),
     eq(channels.archived, false),
   ];
 
   if (typeof params.channelType === "string") {
-    whereClauses.push(eq(channels.channelType, params.channelType as string));
+    whereClauses.push(eq(channels.channelType, params.channelType));
   }
 
   const limit = Math.min(
@@ -153,7 +150,7 @@ async function handleSendMessage(
 
   const seqNum = Number(seqRows[0]?.seq ?? 0) + 1;
 
-  const msgData: NewMessage = {
+  const messageData: typeof messages.$inferInsert = {
     channelId,
     senderAgentId: actor.kind === "agent" ? actor.id : null,
     senderUserId: actor.kind === "user" ? actor.id : null,
@@ -162,10 +159,11 @@ async function handleSendMessage(
     structuredPayload: (params.structuredPayload as Record<string, unknown>) ?? null,
     parentId,
     sequenceNum: seqNum,
-  };
+  } as typeof messages.$inferInsert;
+
   const inserted = await db
     .insert(messages)
-    .values(msgData)
+    .values(messageData)
     .returning();
 
   const newMessage = inserted[0];
@@ -198,7 +196,7 @@ async function handleGetMessages(
   const channelId = String(params.channelId ?? "");
   if (!channelId) throw new Error("channelId is required");
 
-  const whereClauses = [
+  const whereClauses: SQL<unknown>[] = [
     eq(messages.channelId, channelId),
     eq(messages.deleted, false),
   ];
@@ -247,12 +245,13 @@ async function handleAddReaction(
   if (!messageId) throw new Error("messageId is required");
   if (!emoji) throw new Error("emoji is required");
 
-  const reactionData: NewReaction = {
+  const reactionData: typeof messageReactions.$inferInsert = {
     messageId,
     agentId: actor.kind === "agent" ? actor.id : null,
     userId: actor.kind === "user" ? actor.id : null,
     emoji,
-  };
+  } as typeof messageReactions.$inferInsert;
+
   const inserted = await db
     .insert(messageReactions)
     .values(reactionData)
@@ -285,12 +284,13 @@ async function handleJoinChannel(
 
   // Try to insert membership (unique constraint will prevent duplicates)
   try {
-    const membershipData: NewChannelMembership = {
+    const membershipData: typeof channelMemberships.$inferInsert = {
       channelId,
       agentId: actor.kind === "agent" ? actor.id : null,
       userId: actor.kind === "user" ? actor.id : null,
       role: "member",
-    };
+    } as typeof channelMemberships.$inferInsert;
+
     await db.insert(channelMemberships).values(membershipData);
   } catch {
     // Already a member, idempotent
@@ -315,7 +315,7 @@ async function handleLeaveChannel(
     .update(channelMemberships)
     .set({
       leftAt: new Date(),
-    })
+    } as Partial<typeof channelMemberships.$inferInsert>)
     .where(and(eq(channelMemberships.channelId, channelId), actorCondition));
 
   return { channelId, status: "left" };
@@ -328,7 +328,7 @@ async function handleSearchMessages(
   const query = String(params.query ?? "");
   if (!query) throw new Error("query is required");
 
-  const whereClauses = [
+  const whereClauses: SQL<unknown>[] = [
     sql`${messages.content} ILIKE ${`%${query}%`}`,
     eq(messages.deleted, false),
   ];
@@ -421,19 +421,19 @@ router.post("/slash", async (req: Request, res: Response) => {
       const data = await handler(actor, params as Record<string, unknown>);
       res.json({ success: true, data, error: null });
     } catch (err: unknown) {
-      if (err instanceof Error && err.message === "Channel not found") {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      if (message === "Channel not found") {
         res.status(404).json({
           success: false,
           data: null,
-          error: { code: "NOT_FOUND", message: (err as Error).message },
+          error: { code: "NOT_FOUND", message },
         });
         return;
       }
-      const errMsg = err instanceof Error ? err.message : String(err);
       res.status(400).json({
         success: false,
         data: null,
-        error: { code: "ACTION_ERROR", message: errMsg },
+        error: { code: "ACTION_ERROR", message },
       });
     }
   } catch (err) {

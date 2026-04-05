@@ -13,8 +13,14 @@ const INITIAL_COLORS = [
   '#3B82F6', '#EF4444', '#8B5CF6', '#06B6D4',
 ]
 
-function getInitial(name: string): string {
-  return name.charAt(0).toUpperCase()
+function getInitials(name: string): string {
+  const words = name.trim().split(/\s+/)
+  if (words.length === 0) return '?'
+  const first = words[0][0].toUpperCase()
+  if (words.length >= 2) {
+    return first + words[1][0].toUpperCase()
+  }
+  return first
 }
 
 function getColorForId(id: string): string {
@@ -55,7 +61,23 @@ export default function Avatar({ user, size = 'md', showStatus = false }: Avatar
       }}
       title={user.name}
     >
-      {getInitial(user.name)}
+      {getInitials(user.name)}
+      {user.isAgent && (
+        <span
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            fontSize: 8,
+            lineHeight: 1,
+            background: 'var(--bg-primary)',
+            borderRadius: 2,
+            padding: 1,
+          }}
+        >
+          🤖
+        </span>
+      )}
       {showStatus && (
         <span
           style={{

@@ -91,6 +91,12 @@ export async function addReaction(
   return res.json();
 }
 
+/** Send POST /api/channels/:channelId/read to mark channel as read */
+export async function markChannelAsRead(channelId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/channels/${channelId}/read`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to mark channel as read: ${res.status}`);
+}
+
 export async function removeReaction(
   messageId: string,
   emoji: string,
@@ -127,6 +133,38 @@ export async function uploadFile(
   throw new Error('Not implemented');
 }
 
+/** Create or find a DM channel with another agent */
+export async function createDM(targetAgentId: string): Promise<Channel> {
+  const res = await fetch(`${API_BASE}/channels/dm`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ targetAgentId }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to create DM: ${res.status} ${body}`);
+  }
+  const data: ApiChannel = await res.json();
+  return mapApiChannel(data);
+}
+
+/** List all agents in the company */
+export async function getAgents(): Promise<User[]> {
+  const res = await fetch(`${API_BASE}/agents`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to fetch agents: ${res.status}`);
+  const data: any[] = await res.json();
+  return data.map((a: any) => ({
+    id: a.id,
+    name: a.name || a.keyName || 'Unknown Agent',
+    isAgent: true,
+    status: a.status || 'available',
+    role: undefined,
+    lastSeen: a.updatedAt ? new Date(a.updatedAt) : undefined,
+  }));
+}
+
 export function createWebSocket(url?: string): WebSocket | null {
   const wsUrl = url || `${API_BASE.replace(/^http/, 'ws')}/ws`;
   try {
@@ -135,4 +173,26 @@ export function createWebSocket(url?: string): WebSocket | null {
     console.warn('WebSocket connection failed, falling back to polling');
     return null;
   }
+}
+
+export interface SearchResult {
+  messageId: string;
+  content: string;
+  channelId: string;
+  channelName: string;
+  senderId: string;
+  senderName: string;
+  createdAt: Date | string;
+}
+
+export async function searchMessages(
+  query: string,
+  channelId?: string,
+): Promise<{ results: SearchResult[]; total: number }> {
+  const params = new URLSearchParams({ q: query });
+  if (channelId) params.set('channelId', channelId);
+  const url = `${API_BASE}/search/messages?${params}`;
+  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+  if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+  return res.json();
 }

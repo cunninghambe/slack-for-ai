@@ -4,11 +4,13 @@ import {
   db,
   channels,
   channelMemberships,
+  channelReadReceipts,
+  messages,
   agents,
-  type NewChannel,
-  type NewChannelMembership,
+  NewChannel,
+  NewChannelMembership,
 } from "../db.js";
-import { eq, and, isNull, asc } from "drizzle-orm";
+import { eq, and, isNull, asc, sql, gt, count as drizzleCount, inArray } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
 import { logActivity, paramStr, asyncHandler } from "../utils/helpers.js";
 import { COMPANY_ID } from "../config.js";
@@ -35,11 +37,14 @@ const updateChannelSchema = z.object({
 router.use(authenticate);
 router.use(requireCompany(COMPANY_ID));
 
-// GET /api/channels - List accessible channels
+// GET /api/channels - List accessible channels with unread counts
 router.get(
   "/",
-  asyncHandler(async (_req: Request, res: Response) => {
-    const results = await db
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = (req as any).actor;
+
+    // Basic channel listing
+    const channelResults = await db
       .select({
         id: channels.id,
         name: channels.name,
@@ -59,6 +64,82 @@ router.get(
         )
       )
       .orderBy(asc(channels.name));
+
+    const results = channelResults as any[];
+
+    // If actor is authenticated, enrich with unreadCount
+    if (actor && results.length > 0) {
+      const channelIds = results.map((ch: any) => ch.id);
+
+      // Get membership info for unread calculation
+      const membershipCond = actor.kind === "agent"
+        ? and(
+            eq(channelMemberships.agentId, actor.id),
+            isNull(channelMemberships.leftAt)
+          )
+        : and(
+            eq(channelMemberships.userId, actor.id),
+            isNull(channelMemberships.leftAt)
+          );
+
+      const memberships = await db
+        .select({ channelId: channelMemberships.channelId })
+        .from(channelMemberships)
+        .where(membershipCond);
+
+      const memberChannelIds = new Set(memberships.map((m: any) => m.channelId));
+
+      // Get read receipts
+      const receiptCond = actor.kind === "agent"
+        ? and(
+            inArray(channelReadReceipts.channelId, channelIds),
+            eq(channelReadReceipts.agentId, actor.id)
+          )
+        : and(
+            inArray(channelReadReceipts.channelId, channelIds),
+            eq(channelReadReceipts.userId, actor.id)
+          );
+
+      const receipts = await db
+        .select({
+          channelId: channelReadReceipts.channelId,
+          lastReadAt: channelReadReceipts.lastReadAt,
+        } as any)
+        .from(channelReadReceipts)
+        .where(receiptCond);
+
+      const readAtMap = new Map<string, Date>();
+      for (const r of receipts) {
+        readAtMap.set(r.channelId, r.lastReadAt as any);
+      }
+
+      // For each channel, compute unreadCount
+      for (const ch of results) {
+        if (!memberChannelIds.has(ch.id)) {
+          ch.unreadCount = 0;
+          continue;
+        }
+
+        const lastReadAt = readAtMap.get(ch.id);
+        const whereParts: any[] = [
+          eq(messages.channelId, ch.id),
+          isNull(messages.deletedAt),
+        ];
+        if (lastReadAt) {
+          whereParts.push(gt(messages.createdAt, lastReadAt));
+        }
+        const msgCount = await db
+          .select({ cnt: drizzleCount() })
+          .from(messages)
+          .where(and(...whereParts));
+
+        ch.unreadCount = msgCount[0]?.cnt ?? 0;
+      }
+    } else {
+      for (const ch of results) {
+        ch.unreadCount = 0;
+      }
+    }
 
     res.json(results);
   })
@@ -95,6 +176,8 @@ router.get(
         role: channelMemberships.role,
         joinedAt: channelMemberships.joinedAt,
         leftAt: channelMemberships.leftAt,
+        agentId: channelMemberships.agentId,
+        userId: channelMemberships.userId,
       })
       .from(channelMemberships)
       .where(eq(channelMemberships.channelId, channel.id));
@@ -130,7 +213,8 @@ router.post(
       description: description ?? null,
       creatorAgentId: actor.kind === "agent" ? actor.id : null,
       creatorUserId: actor.kind === "user" ? actor.id : null,
-    };
+    } as NewChannel;
+
     const inserted = await db
       .insert(channels)
       .values(channelData)
@@ -139,13 +223,13 @@ router.post(
     const newChannel = inserted[0];
 
     // Add creator as admin
-    const creatorMembership: NewChannelMembership = {
+    const memberData: NewChannelMembership = {
       channelId: newChannel.id,
       agentId: actor.kind === "agent" ? actor.id : null,
       userId: actor.kind === "user" ? actor.id : null,
       role: "admin",
-    };
-    await db.insert(channelMemberships).values(creatorMembership);
+    } as NewChannelMembership;
+    await db.insert(channelMemberships).values(memberData);
 
     // Add specified members for private channels
     if (channelType === "private" || channelType === "group_dm") {
@@ -157,7 +241,7 @@ router.post(
             channelId: newChannel.id,
             agentId,
             role: "member",
-          });
+          } as NewChannelMembership);
         }
       }
 
@@ -167,7 +251,7 @@ router.post(
             channelId: newChannel.id,
             userId,
             role: "member",
-          });
+          } as NewChannelMembership);
         }
       }
 
@@ -183,6 +267,100 @@ router.post(
       entityType: "channel",
       entityId: newChannel.id,
       details: { name, channelType },
+    });
+
+    res.status(201).json(newChannel);
+  })
+);
+
+// POST /api/channels/dm - Find or create a DM channel
+router.post(
+  "/dm",
+  asyncHandler(async (req: Request, res: Response) => {
+    const actor = req.actor!;
+    const { targetAgentId, targetUserId } = req.body;
+
+    if (!targetAgentId && !targetUserId) {
+      res.status(422).json({ error: "targetAgentId or targetUserId required" });
+      return;
+    }
+
+    // Check if DM channel already exists between these two actors
+    const existingChannels = await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.companyId, COMPANY_ID),
+          eq(channels.channelType, "dm"),
+          isNull(channels.deletedAt)
+        )
+      );
+
+    for (const ch of existingChannels) {
+      const members = await db
+        .select()
+        .from(channelMemberships)
+        .where(
+          and(
+            eq(channelMemberships.channelId, ch.id),
+            isNull(channelMemberships.leftAt)
+          )
+        );
+
+      const actorId = actor.id;
+      const targetId = targetAgentId || targetUserId;
+      const memberIds = members.map((m) => m.agentId || m.userId);
+
+      if (
+        members.length === 2 &&
+        memberIds.includes(actorId) &&
+        memberIds.includes(targetId)
+      ) {
+        res.json(ch);
+        return;
+      }
+    }
+
+    // Create new DM channel
+    const slug = `dm-${Date.now()}`;
+
+    const dmChannelData: NewChannel = {
+      companyId: COMPANY_ID,
+      name: slug,
+      slug,
+      channelType: "dm",
+      creatorAgentId: actor.kind === "agent" ? actor.id : null,
+      creatorUserId: actor.kind === "user" ? actor.id : null,
+    } as NewChannel;
+
+    const [newChannel] = await db
+      .insert(channels)
+      .values(dmChannelData)
+      .returning();
+
+    // Add both members
+    const dmMemberA: NewChannelMembership = {
+      channelId: newChannel.id,
+      agentId: actor.kind === "agent" ? actor.id : null,
+      userId: actor.kind === "user" ? actor.id : null,
+      role: "member",
+    } as NewChannelMembership;
+    const dmMemberB: NewChannelMembership = {
+      channelId: newChannel.id,
+      agentId: targetAgentId || null,
+      userId: targetUserId || null,
+      role: "member",
+    } as NewChannelMembership;
+    await db.insert(channelMemberships).values([dmMemberA, dmMemberB]);
+
+    await logActivity({
+      actor,
+      companyId: COMPANY_ID,
+      action: "channel.dm_created",
+      entityType: "channel",
+      entityId: newChannel.id,
+      details: { targetAgentId, targetUserId },
     });
 
     res.status(201).json(newChannel);

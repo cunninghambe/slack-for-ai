@@ -11,7 +11,7 @@
  */
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { db, channels, channelMemberships, agents as agentsTable, authUsers, type NewChannelMembership } from "../db.js";
+import { db, channels, channelMemberships, agents as agentsTable, authUsers } from "../db.js";
 import { eq, and, isNull } from "drizzle-orm";
 import { authenticate } from "../middleware/auth.js";
 import { logActivity } from "../utils/helpers.js";
@@ -185,15 +185,15 @@ router.post("/:channelId/members", async (req: Request, res: Response) => {
       return;
     }
 
-    const memberData: NewChannelMembership = {
+    const insertData: typeof channelMemberships.$inferInsert = {
       channelId,
       agentId: agentId ?? null,
       userId: userId ?? null,
       role,
-    };
+    } as typeof channelMemberships.$inferInsert;
     const [inserted] = await db
       .insert(channelMemberships)
-      .values(memberData)
+      .values(insertData)
       .returning();
 
     const addedKind = agentId ? "agent" : "user";
@@ -254,9 +254,10 @@ router.delete("/:channelId/members/:agentId", async (req: Request, res: Response
     }
 
     // Soft-delete by setting leftAt
+    const updateValues = { leftAt: new Date() };
     await db
       .update(channelMemberships)
-      .set({ leftAt: new Date() })
+      .set(updateValues as unknown as typeof channelMemberships.$inferInsert)
       .where(eq(channelMemberships.id, membership.id));
 
     await logActivity({

@@ -16,7 +16,6 @@ import {
   channels,
   channelMemberships,
   fileAttachments,
-  type NewFileAttachment,
 } from "../db.js";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
@@ -92,19 +91,18 @@ router.post("/channels/:channelId/upload", upload.single("file"), async (req, re
     const file = req.file;
     const ext = file.originalname.split(".").pop() || "";
 
-    const attachmentData: NewFileAttachment = {
-      channelId,
-      filename: file.originalname,
-      storedName: file.filename,
-      mimeType: file.mimetype ?? "application/octet-stream",
-      sizeBytes: file.size,
-      extension: ext || null,
-      uploadedByAgentId: actor.kind === "agent" ? actor.id : null,
-      uploadedByUserId: actor.kind === "user" ? actor.id : null,
-    };
     const [attachment] = await db
       .insert(fileAttachments)
-      .values(attachmentData)
+      .values({
+        channelId,
+        filename: file.originalname,
+        storedName: file.filename,
+        mimeType: file.mimetype ?? "application/octet-stream",
+        sizeBytes: file.size,
+        extension: ext || null,
+        uploadedByAgentId: actor.kind === "agent" ? actor.id : null,
+        uploadedByUserId: actor.kind === "user" ? actor.id : null,
+      } as unknown as typeof fileAttachments.$inferInsert)
       .returning();
 
     await logActivity({
@@ -209,7 +207,8 @@ router.delete("/files/:fileId", async (req, res) => {
       return res.status(403).json({ error: "Only admins or the file owner can delete" });
     }
 
-    await db.update(fileAttachments).set({ deletedAt: new Date() }).where(eq(fileAttachments.id, fileId));
+    const deleteData = { deletedAt: new Date() };
+    await db.update(fileAttachments).set(deleteData as unknown as typeof fileAttachments.$inferInsert).where(eq(fileAttachments.id, fileId));
 
     // Attempt to delete the physical file
     try {

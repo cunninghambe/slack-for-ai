@@ -33,9 +33,9 @@ export function mapApiChannel(api: ApiChannel): Channel {
     memberCount: api.memberships
       ? api.memberships.filter((m) => !m.leftAt).length
       : 0,
-    unreadCount: 0,
+    unreadCount: (api as any).unreadCount ?? 0,
     members: api.memberships
-      ? api.memberships.filter((m) => !m.leftAt).map((m) => m.role || 'member')
+      ? api.memberships.filter((m) => !m.leftAt).map((m) => m.agentId || m.userId || '')
       : [],
     lastMessageAt: undefined,
     createdBy: undefined,

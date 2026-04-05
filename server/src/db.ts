@@ -17,6 +17,7 @@ import {
   index,
   unique,
 } from "drizzle-orm/pg-core";
+import { InferInsertModel } from "drizzle-orm";
 
 // ============================================================
 // Platform tables (shared with Paperclip main app)
@@ -161,9 +162,8 @@ export const channelMemberships = pgTable(
     channelIdx: index("platform_memberships_channel_idx").on(table.channelId),
     agentIdx: index("platform_memberships_agent_idx").on(table.agentId),
     userIdx: index("platform_memberships_user_idx").on(table.userId),
-    // Unique constraints removed — overly strict (prevented rejoin after leave).
-    // Application layer enforces one active membership per user/agent per channel
-    // by checking `WHERE leftAt IS NULL` before inserting.
+    // Unique constraints removed — application layer enforces one active membership per user per channel
+    // This allows users who left (leftAt IS NOT NULL) to rejoin the channel
   })
 );
 
@@ -273,6 +273,39 @@ export const readReceipts = pgTable(
 );
 
 // ============================================================
+// Channel read receipts (per-channel last-read tracking)
+// ============================================================
+
+export const channelReadReceipts = pgTable(
+  "platform_channel_read_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => authUsers.id, { onDelete: "cascade" }),
+    lastReadMessageId: uuid("last_read_message_id"),
+    lastReadAt: timestamp("last_read_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    channelAgentUnique: unique("platform_crr_channel_agent_unique").on(
+      table.channelId,
+      table.agentId,
+    ),
+    channelUserUnique: unique("platform_crr_channel_user_unique").on(
+      table.channelId,
+      table.userId,
+    ),
+    agentIdx: index("platform_crr_agent_idx").on(table.agentId),
+    userIdx: index("platform_crr_user_idx").on(table.userId),
+    channelIdx: index("platform_crr_channel_idx").on(table.channelId),
+  }),
+);
+
+// ============================================================
 // Presence and audit log
 // ============================================================
 
@@ -376,20 +409,19 @@ function wrapPoolForSlowQueries(targetPool: Pool): Pool {
 }
 
 // ============================================================
+// Drizzle insert model types — eliminate `as any` casts
+// ============================================================
+
+export type NewChannel = InferInsertModel<typeof channels>;
+export type NewChannelMembership = InferInsertModel<typeof channelMemberships>;
+export type NewMessage = InferInsertModel<typeof messages>;
+export type NewReaction = InferInsertModel<typeof messageReactions>;
+export type NewActivityLog = InferInsertModel<typeof activityLog>;
+export type NewFileAttachment = InferInsertModel<typeof fileAttachments>;
+
+// ============================================================
 // Full schema object for typed db
 // ============================================================
-
-// ============================================================
-// Insert model types (avoids `as any` on .values() / .set())
-// ============================================================
-
-export type NewChannel = typeof channels.$inferInsert;
-export type NewChannelMembership = typeof channelMemberships.$inferInsert;
-export type NewMessage = typeof messages.$inferInsert;
-export type NewReaction = typeof messageReactions.$inferInsert;
-export type NewActivityLog = typeof activityLog.$inferInsert;
-export type NewFileAttachment = typeof fileAttachments.$inferInsert;
-export type NewReadReceipt = typeof readReceipts.$inferInsert;
 
 export const schema = {
   companies,
@@ -403,6 +435,7 @@ export const schema = {
   messageReactions,
   fileAttachments,
   readReceipts,
+  channelReadReceipts,
   presenceAuditLog,
 };
 

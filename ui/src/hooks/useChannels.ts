@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import type { Channel } from '../types'
 import { getChannels as apiGetChannels, createChannel as apiCreateChannel } from '../api/client'
 
+import { markChannelAsRead } from '../api/client'
+
 export function useChannels() {
   const [channels, setChannels] = useState<Channel[]>([])
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null)
@@ -21,6 +23,8 @@ export function useChannels() {
   const selectChannel = useCallback((id: string) => {
     setActiveChannelId(id)
     setChannels((prev) => prev.map((c) => c.id === id ? { ...c, unreadCount: 0 } : c))
+    // Mark as read on the server
+    markChannelAsRead(id).catch(() => { /* ignore errors */ })
   }, [])
 
   const createChannel = useCallback(async (name: string, description: string, type: 'public' | 'private') => {

@@ -19,6 +19,8 @@ interface WSMessage {
   userId?: string
   userName?: string
   actorId?: string
+  displayName?: string
+  status?: string
   message?: ApiMessage
 }
 
@@ -30,7 +32,8 @@ interface UseWebSocketReturn {
   unsubscribe: (channelId: string) => void
   sendTyping: (channelId: string) => void
   onMessage: (handler: (msg: Message) => void) => void
-  onTyping: (handler: (channelId: string, userId: string) => void) => void
+  onTyping: (handler: (channelId: string, userId: string, displayName?: string) => void) => void
+  onPresence: (handler: (channelId: string, userId: string, status: string, displayName?: string) => void) => void
 }
 
 export function useWebSocket(): UseWebSocketReturn {
@@ -38,7 +41,8 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [connectionState, setConnectionState] = useState<WSConnectionState>('disconnected')
   const messageHandlersRef = useRef<Set<(msg: Message) => void>>(new Set())
-  const typingHandlersRef = useRef<Set<(channelId: string, userId: string) => void>>(new Set())
+  const typingHandlersRef = useRef<Set<(channelId: string, userId: string, displayName?: string) => void>>(new Set())
+  const presenceHandlersRef = useRef<Set<(channelId: string, userId: string, status: string, displayName?: string) => void>>(new Set())
   const currentChannelRef = useRef<string | null>(null)
 
   const connect = useCallback(() => {
@@ -85,8 +89,19 @@ export function useWebSocket(): UseWebSocketReturn {
             case 'typing': {
               const channelId = data.channelId
               const userId = data.userId ?? data.actorId ?? 'unknown'
+              const displayName = data.displayName as string | undefined
               if (channelId) {
-                typingHandlersRef.current.forEach((h) => h(channelId, userId))
+                typingHandlersRef.current.forEach((h) => h(channelId, userId, displayName))
+              }
+              break
+            }
+            case 'presence': {
+              const channelId = data.channelId
+              const userId = data.userId ?? 'unknown'
+              const status = (data.status as string) || 'offline'
+              const displayName = data.displayName as string | undefined
+              if (channelId) {
+                presenceHandlersRef.current.forEach((h) => h(channelId, userId, status, displayName))
               }
               break
             }
@@ -148,10 +163,17 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [])
 
-  const onTyping = useCallback((handler: (channelId: string, userId: string) => void) => {
+  const onTyping = useCallback((handler: (channelId: string, userId: string, displayName?: string) => void) => {
     typingHandlersRef.current.add(handler)
     return () => {
       typingHandlersRef.current.delete(handler)
+    }
+  }, [])
+
+  const onPresence = useCallback((handler: (channelId: string, userId: string, status: string, displayName?: string) => void) => {
+    presenceHandlersRef.current.add(handler)
+    return () => {
+      presenceHandlersRef.current.delete(handler)
     }
   }, [])
 
@@ -170,5 +192,6 @@ export function useWebSocket(): UseWebSocketReturn {
     sendTyping,
     onMessage,
     onTyping,
+    onPresence,
   }
 }

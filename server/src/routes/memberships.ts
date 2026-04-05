@@ -17,7 +17,7 @@ import {
   channelMemberships,
   agents as agentsTable,
   authUsers,
-  type NewChannelMembership,
+  NewChannelMembership,
 } from "../db.js";
 import { eq, and, isNull, or, inArray } from "drizzle-orm";
 import { authenticate, requireCompany } from "../middleware/auth.js";
@@ -245,14 +245,15 @@ router.post(
           continue; // skip already a member
         }
 
-        const agentMembership: NewChannelMembership = {
+        const agentMemberData: NewChannelMembership = {
           channelId,
           agentId,
           role,
-        };
+        } as NewChannelMembership;
+
         const [inserted] = await db
           .insert(channelMemberships)
-          .values(agentMembership)
+          .values(agentMemberData)
           .returning();
 
         added.push({ kind: "agent", id: agentId });
@@ -274,14 +275,15 @@ router.post(
           continue;
         }
 
-        const userMembership: NewChannelMembership = {
+        const userMemberData: NewChannelMembership = {
           channelId,
           userId,
           role,
-        };
+        } as NewChannelMembership;
+
         const [inserted] = await db
           .insert(channelMemberships)
-          .values(userMembership)
+          .values(userMemberData)
           .returning();
 
         added.push({ kind: "user", id: userId });
@@ -349,7 +351,7 @@ router.patch(
 
     const [updated] = await db
       .update(channelMemberships)
-      .set({ role: validation.data.role })
+      .set({ role: validation.data.role } as Partial<typeof channelMemberships.$inferInsert>)
       .where(eq(channelMemberships.id, memberId))
       .returning();
 
@@ -406,7 +408,7 @@ router.delete(
     // Soft-delete by setting leftAt
     const [updated] = await db
       .update(channelMemberships)
-      .set({ leftAt: new Date() })
+      .set({ leftAt: new Date() } as Partial<typeof channelMemberships.$inferInsert>)
       .where(eq(channelMemberships.id, memberId))
       .returning();
 
@@ -450,7 +452,7 @@ router.delete(
 
     await db
       .update(channelMemberships)
-      .set({ leftAt: new Date() })
+      .set({ leftAt: new Date() } as Partial<typeof channelMemberships.$inferInsert>)
       .where(eq(channelMemberships.id, membership.id));
 
     await logActivity({
